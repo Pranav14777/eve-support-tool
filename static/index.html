@@ -1,0 +1,1536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>EVA Support Reproducer — New Black</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --surface: #111111;
+    --surface2: #1a1a1a;
+    --border: #2a2a2a;
+    --accent: #e8ff00;
+    --accent2: #ff3c00;
+    --text: #f0f0f0;
+    --muted: #666;
+    --low: #4ade80;
+    --medium: #facc15;
+    --high: #fb923c;
+    --critical: #f87171;
+    --blue: #60a5fa;
+    --purple: #a78bfa;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .logo-mark {
+    width: 32px;
+    height: 32px;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #000;
+  }
+
+  .logo-text {
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .logo-sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .status-pill {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    padding: 0.35rem 0.85rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* ── Nav Tabs ── */
+  .nav-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky;
+    top: 57px;
+    z-index: 99;
+  }
+
+  .nav-tab {
+    padding: 0.85rem 1.75rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    border: none;
+    background: none;
+  }
+
+  .nav-tab:hover { color: var(--text); }
+
+  .nav-tab.active {
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+  }
+
+  /* ── Main Layout ── */
+  .main {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    min-height: calc(100vh - 100px);
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    max-height: calc(100vh - 100px);
+    position: sticky;
+    top: 100px;
+  }
+
+  .sidebar-section {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-header {
+    padding: 1rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .sidebar-title {
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .sidebar-count {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--accent);
+  }
+
+  /* Custom form */
+  .custom-form {
+    padding: 1.25rem 1.5rem;
+    background: var(--surface);
+  }
+
+  .custom-form-title {
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    margin-bottom: 0.85rem;
+  }
+
+  .form-group {
+    margin-bottom: 0.65rem;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 0.6rem;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.3rem;
+  }
+
+  .form-group input,
+  .form-group textarea,
+  .form-group select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.5rem 0.75rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    outline: none;
+    transition: border-color 0.2s;
+    resize: none;
+  }
+
+  .form-group input:focus,
+  .form-group textarea:focus,
+  .form-group select:focus {
+    border-color: var(--accent);
+  }
+
+  .form-group select option { background: var(--bg); }
+
+  .btn-primary {
+    width: 100%;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 0.65rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Ticket items */
+  .ticket-item {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .ticket-item:hover { background: var(--surface); }
+  .ticket-item.active {
+    background: var(--surface2);
+    border-left: 3px solid var(--accent);
+  }
+
+  .ticket-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.4rem;
+  }
+
+  .ticket-id {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--accent);
+  }
+
+  .priority-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+
+  .priority-dot.high, .priority-dot.critical { background: var(--high); }
+  .priority-dot.medium { background: var(--medium); }
+  .priority-dot.low { background: var(--low); }
+
+  .ticket-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-bottom: 0.25rem;
+  }
+
+  .ticket-store {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+  }
+
+  /* Log items */
+  .log-item {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .log-item:hover { background: var(--surface); }
+  .log-item.active { background: var(--surface2); border-left: 3px solid var(--blue); }
+
+  .log-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.4rem;
+  }
+
+  .log-id {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--blue);
+  }
+
+  .status-badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.55rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .status-badge.Open { background: rgba(251,146,60,0.15); color: var(--high); }
+  .status-badge.In-Progress { background: rgba(96,165,250,0.15); color: var(--blue); }
+  .status-badge.Escalated { background: rgba(255,60,0,0.15); color: var(--accent2); }
+  .status-badge.Resolved { background: rgba(74,222,128,0.15); color: var(--low); }
+
+  /* ── Content ── */
+  .content {
+    padding: 2.5rem;
+    overflow-y: auto;
+  }
+
+  /* Empty + Loading states */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    text-align: center;
+    gap: 1rem;
+  }
+
+  .empty-state-icon { font-size: 2.5rem; opacity: 0.2; }
+  .empty-state h2 { font-size: 1.4rem; font-weight: 800; }
+  .empty-state p {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    max-width: 300px;
+    line-height: 1.6;
+  }
+
+  .loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    gap: 1.5rem;
+  }
+
+  .loading-bar { width: 200px; height: 2px; background: var(--border); overflow: hidden; }
+  .loading-bar-inner {
+    height: 100%;
+    background: var(--accent);
+    animation: loading 1.2s ease-in-out infinite;
+  }
+
+  @keyframes loading {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+  }
+
+  .loading-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+
+  /* ── Result ── */
+  .result-header {
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .result-ticket-id {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    margin-bottom: 0.6rem;
+  }
+
+  .result-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-bottom: 0.75rem;
+  }
+
+  .result-meta {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .meta-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .meta-tag.severity-low { border-color: var(--low); color: var(--low); }
+  .meta-tag.severity-medium { border-color: var(--medium); color: var(--medium); }
+  .meta-tag.severity-high { border-color: var(--high); color: var(--high); }
+  .meta-tag.severity-critical { border-color: var(--critical); color: var(--critical); }
+  .meta-tag.escalate { border-color: var(--accent2); color: var(--accent2); }
+  .meta-tag.kb-match { border-color: var(--blue); color: var(--blue); }
+  .meta-tag.past-match { border-color: var(--purple); color: var(--purple); }
+  .meta-tag.analyzed-llm { border-color: var(--accent); color: var(--accent); }
+  .meta-tag.analyzed-fallback { border-color: var(--muted); color: var(--muted); }
+
+  /* Status controls */
+  .status-controls {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+  }
+
+  .status-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-right: 0.5rem;
+  }
+
+  .btn-status {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: none;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    transition: all 0.2s;
+  }
+
+  .btn-status:hover { border-color: var(--text); color: var(--text); }
+  .btn-status.active-status { border-color: var(--accent); color: var(--accent); }
+
+  .btn-resolve {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--low);
+    color: var(--low);
+    background: none;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    transition: all 0.2s;
+    margin-left: auto;
+  }
+
+  .btn-resolve:hover { background: rgba(74,222,128,0.1); }
+
+  /* Sections */
+  .sections-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 1.25rem;
+  }
+
+  .section.full-width { grid-column: 1 / -1; }
+
+  .section-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.58rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .section-content { font-size: 0.875rem; line-height: 1.6; }
+  .section-content.mono {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+  }
+
+  /* Checklist */
+  .checklist { list-style: none; display: flex; flex-direction: column; gap: 0.65rem; }
+  .checklist li {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-start;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+  }
+  .checklist li::before { content: '→'; color: var(--accent); flex-shrink: 0; }
+
+  /* KB + Past resolution boxes */
+  .kb-box {
+    background: rgba(96,165,250,0.05);
+    border: 1px solid rgba(96,165,250,0.2);
+    padding: 1.1rem;
+    margin-bottom: 1rem;
+  }
+
+  .past-box {
+    background: rgba(167,139,250,0.05);
+    border: 1px solid rgba(167,139,250,0.2);
+    padding: 1.1rem;
+    margin-bottom: 1rem;
+  }
+
+  .box-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .box-title.kb { color: var(--blue); }
+  .box-title.past { color: var(--purple); }
+  .box-content { font-size: 0.85rem; line-height: 1.6; }
+
+  /* Escalation box */
+  .escalation-box {
+    background: rgba(255,60,0,0.05);
+    border: 1px solid rgba(255,60,0,0.3);
+    padding: 1.1rem;
+    margin-bottom: 1rem;
+  }
+
+  .escalation-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--accent2);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  /* Reply box */
+  .reply-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 1.1rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    line-height: 1.8;
+    white-space: pre-wrap;
+  }
+
+  /* Warning */
+  .warning-box {
+    background: rgba(250,204,21,0.05);
+    border: 1px solid rgba(250,204,21,0.2);
+    padding: 0.85rem 1.1rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--medium);
+    margin-bottom: 1.25rem;
+  }
+
+  /* Resolve modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.8);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.active { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 2rem;
+    width: 480px;
+    max-width: 90vw;
+  }
+
+  .modal-title {
+    font-size: 1.1rem;
+    font-weight: 800;
+    margin-bottom: 0.5rem;
+  }
+
+  .modal-sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--muted);
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+  }
+
+  .btn-cancel {
+    flex: 1;
+    padding: 0.65rem;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: none;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-confirm {
+    flex: 2;
+    padding: 0.65rem;
+    background: var(--low);
+    color: #000;
+    border: none;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Follow up section */
+  .followup-section {
+    margin-top: 1.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 1.25rem;
+  }
+
+  .followup-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.85rem;
+  }
+
+  .followup-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.65rem 0.85rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    outline: none;
+    resize: none;
+    margin-bottom: 0.75rem;
+    transition: border-color 0.2s;
+  }
+
+  .followup-input:focus { border-color: var(--accent); }
+
+  /* Stats panel */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 1.5rem;
+  }
+
+  .stat-value {
+    font-size: 2.5rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 0.5rem;
+  }
+
+  .stat-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .stat-sub {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text);
+    margin-top: 0.75rem;
+    line-height: 1.6;
+  }
+
+  /* Animations */
+  .fade-in {
+    animation: fadeIn 0.35s ease forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  ::-webkit-scrollbar { width: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); }
+</style>
+</head>
+<body>
+
+<!-- Resolve Modal -->
+<div class="modal-overlay" id="resolve-modal">
+  <div class="modal">
+    <div class="modal-title">Mark as Resolved</div>
+    <div class="modal-sub">Enter the actual fix that resolved this issue. This will be stored in the vector database so future similar tickets benefit from this resolution.</div>
+    <div class="form-group">
+      <label>Actual Fix Applied</label>
+      <textarea id="actual-fix-input" rows="4" class="followup-input" placeholder="Describe exactly what fixed the issue..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeResolveModal()">Cancel</button>
+      <button class="btn-confirm" onclick="confirmResolve()">Resolve + Store in Vector DB →</button>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="logo">
+    <div class="logo-mark">NB</div>
+    <div>
+      <div class="logo-text">EVA Support Reproducer</div>
+      <div class="logo-sub">New Black · Second Line Support Tool · v2.0</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-pill">● System Online</div>
+  </div>
+</header>
+
+<!-- Nav Tabs -->
+<div class="nav-tabs">
+  <button class="nav-tab active" onclick="switchTab('analyze')">▸ Analyze</button>
+  <button class="nav-tab" onclick="switchTab('logs')">▸ Ticket Logs</button>
+  <button class="nav-tab" onclick="switchTab('stats')">▸ Analytics</button>
+</div>
+
+<div class="main">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+
+    <!-- Custom ticket form -->
+    <div class="sidebar-section">
+      <div class="custom-form">
+        <div class="custom-form-title">▸ Submit Custom Ticket</div>
+        <div class="form-group">
+          <label>Title</label>
+          <input type="text" id="custom-title" placeholder="e.g. POS not syncing orders"/>
+        </div>
+        <div class="form-group">
+          <label>Store / Partner</label>
+          <input type="text" id="custom-store" placeholder="e.g. Rituals Amsterdam"/>
+        </div>
+        <div class="form-group">
+          <label>Priority</label>
+          <select id="custom-priority">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="custom-description" rows="4" placeholder="Describe the issue in detail..."></textarea>
+        </div>
+        <button class="btn-primary" onclick="analyzeCustomTicket()">Analyze Ticket →</button>
+      </div>
+    </div>
+
+    <!-- Sample tickets -->
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        <span class="sidebar-title">Sample Tickets</span>
+        <span class="sidebar-count" id="ticket-count">—</span>
+      </div>
+      <div id="ticket-list"></div>
+    </div>
+
+  </aside>
+
+  <!-- Content -->
+  <main class="content" id="content">
+    <div class="empty-state">
+      <div class="empty-state-icon">◈</div>
+      <h2>Select a ticket to analyze</h2>
+      <p>Choose a sample ticket or submit a custom one to see the structured support analysis.</p>
+    </div>
+  </main>
+
+</div>
+
+<script>
+  let activeTicketId = null;
+  let activeLogId = null;
+  let currentLogId = null;
+  let currentTicket = null;
+  let currentAnalysis = null;
+  let currentTab = 'analyze';
+
+  // ── Tab switching ──────────────────────────────────────────────────────────
+
+  function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.nav-tab').forEach((t, i) => {
+      t.classList.toggle('active', ['analyze','logs','stats'][i] === tab);
+    });
+
+    const sidebar = document.getElementById('sidebar');
+
+    if (tab === 'analyze') {
+      // Rebuild the analyze sidebar completely
+      sidebar.style.display = '';
+      sidebar.innerHTML = `
+        <div class="sidebar-section">
+          <div class="custom-form">
+            <div class="custom-form-title">▸ Submit Custom Ticket</div>
+            <div class="form-group">
+              <label>Title</label>
+              <input type="text" id="custom-title" placeholder="e.g. POS not syncing orders"/>
+            </div>
+            <div class="form-group">
+              <label>Store / Partner</label>
+              <input type="text" id="custom-store" placeholder="e.g. Rituals Amsterdam"/>
+            </div>
+            <div class="form-group">
+              <label>Priority</label>
+              <select id="custom-priority">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Description</label>
+              <textarea id="custom-description" rows="4" placeholder="Describe the issue in detail..."></textarea>
+            </div>
+            <button class="btn-primary" onclick="analyzeCustomTicket()">Analyze Ticket →</button>
+          </div>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-header">
+            <span class="sidebar-title">Sample Tickets</span>
+            <span class="sidebar-count" id="ticket-count">—</span>
+          </div>
+          <div id="ticket-list"></div>
+        </div>
+      `;
+      activeTicketId = null;
+      loadTickets();
+      showEmpty();
+
+    } else if (tab === 'logs') {
+      sidebar.style.display = '';
+      loadLogs();
+      showContent(`
+        <div class="empty-state">
+          <div class="empty-state-icon">◈</div>
+          <h2>Select a log entry</h2>
+          <p>Click a logged ticket from the sidebar to view full details and manage its status.</p>
+        </div>
+      `);
+
+    } else if (tab === 'stats') {
+      sidebar.style.display = 'none';
+      loadStats();
+    }
+  }
+
+  // ── Load tickets ───────────────────────────────────────────────────────────
+
+  async function loadTickets() {
+    try {
+      const res = await fetch('/tickets');
+      const data = await res.json();
+      const list = document.getElementById('ticket-list');
+      document.getElementById('ticket-count').textContent = `${data.total} tickets`;
+
+      data.tickets.forEach(ticket => {
+        const item = document.createElement('div');
+        item.className = 'ticket-item';
+        item.id = `ticket-${ticket.id}`;
+        item.onclick = () => analyzeSampleTicket(ticket.id);
+        item.innerHTML = `
+          <div class="ticket-item-header">
+            <span class="ticket-id">${ticket.id}</span>
+            <span class="priority-dot ${ticket.priority}"></span>
+          </div>
+          <div class="ticket-title">${ticket.title}</div>
+          <div class="ticket-store">${ticket.store}</div>
+        `;
+        list.appendChild(item);
+      });
+    } catch (err) {
+      console.error('Failed to load tickets:', err);
+    }
+  }
+
+  // ── Load logs ──────────────────────────────────────────────────────────────
+
+  async function loadLogs() {
+    const sidebar = document.getElementById('sidebar');
+    sidebar.innerHTML = `
+      <div class="sidebar-section">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Ticket Logs</span>
+          <span class="sidebar-count" id="log-count">—</span>
+        </div>
+        <div id="log-list"></div>
+      </div>
+    `;
+
+    try {
+      const res = await fetch('/logs');
+      const data = await res.json();
+      document.getElementById('log-count').textContent = `${data.total} logged`;
+
+      const list = document.getElementById('log-list');
+
+      if (data.total === 0) {
+        list.innerHTML = `<div style="padding:1.5rem;font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted)">No tickets logged yet.</div>`;
+        return;
+      }
+
+      data.logs.forEach(log => {
+        const item = document.createElement('div');
+        item.className = 'log-item';
+        item.id = `log-${log.log_id}`;
+        item.onclick = () => viewLog(log.log_id);
+        const statusClass = log.status.replace(' ', '-');
+        item.innerHTML = `
+          <div class="log-item-header">
+            <span class="log-id">LOG-${log.log_id}</span>
+            <span class="status-badge ${statusClass}">${log.status}</span>
+          </div>
+          <div class="ticket-title" style="font-size:0.8rem">${log.title}</div>
+          <div class="ticket-store">${log.store}</div>
+        `;
+        list.appendChild(item);
+      });
+    } catch (err) {
+      console.error('Failed to load logs:', err);
+    }
+  }
+
+  // ── View log ───────────────────────────────────────────────────────────────
+
+  async function viewLog(logId) {
+    if (activeLogId) {
+      document.getElementById(`log-${activeLogId}`)?.classList.remove('active');
+    }
+    activeLogId = logId;
+    document.getElementById(`log-${logId}`)?.classList.add('active');
+
+    showLoading();
+
+    try {
+      const res = await fetch(`/logs/${logId}`);
+      const log = await res.json();
+      currentLogId = logId;
+
+      const ticket = {
+        id: log.ticket_id,
+        title: log.title,
+        store: log.store,
+        priority: log.priority
+      };
+
+      const analysis = {
+        issue_type: log.issue_type,
+        severity: log.severity,
+        likely_cause: log.likely_cause,
+        workaround: log.workaround,
+        suggested_next_step: log.suggested_next_step,
+        escalate_to_third_line: log.escalate_to_third_line,
+        escalation_reason: log.escalation_reason,
+        internal_note: log.internal_note,
+        customer_reply: log.customer_reply,
+        known_issue: log.known_issue,
+        knowledge_base_article: log.knowledge_base_article,
+        known_fix: log.known_fix,
+        analyzed_by: log.analyzed_by,
+        reproduction_checklist: log.reproduction_checklist || []
+      };
+
+      const statusClass = log.status.replace(' ', '-');
+
+      showContent(`
+        <div class="fade-in">
+          <div class="result-header">
+            <div class="result-ticket-id">LOG-${log.log_id} · ${log.ticket_id} · ${log.store}</div>
+            <div class="result-title">${log.title}</div>
+            <div class="result-meta">
+              <span class="meta-tag severity-${analysis.severity?.toLowerCase()}">${analysis.severity} Severity</span>
+              <span class="meta-tag">${analysis.issue_type}</span>
+              ${analysis.escalate_to_third_line ? `<span class="meta-tag escalate">⚠ Escalate to 3rd Line</span>` : ''}
+              ${analysis.known_issue ? `<span class="meta-tag kb-match">KB Match</span>` : ''}
+              <span class="meta-tag analyzed-${analysis.analyzed_by === 'llm' ? 'llm' : 'fallback'}">${analysis.analyzed_by === 'llm' ? '● LLM Analyzed' : '● Fallback'}</span>
+              <span class="status-badge ${statusClass}" style="font-size:0.65rem;padding:0.3rem 0.75rem">${log.status}</span>
+            </div>
+          </div>
+
+          <!-- Status controls -->
+          <div class="status-controls">
+            <span class="status-label">Status:</span>
+            ${['Open','In Progress','Escalated'].map(s => `
+              <button class="btn-status ${log.status === s ? 'active-status' : ''}" 
+                onclick="updateStatus(${logId}, '${s}')">${s}</button>
+            `).join('')}
+            <button class="btn-resolve" onclick="openResolveModal(${logId})">
+              ✓ Mark Resolved + Store Fix →
+            </button>
+          </div>
+
+          ${log.actual_fix ? `
+          <div class="past-box" style="margin-bottom:1rem">
+            <div class="box-title past">✓ Resolved — Actual Fix Applied</div>
+            <div class="box-content">${log.actual_fix}</div>
+          </div>` : ''}
+
+          ${analysis.escalate_to_third_line ? `
+          <div class="escalation-box">
+            <div class="escalation-title">Third Line Escalation Required</div>
+            <div class="box-content">${analysis.escalation_reason || ''}</div>
+          </div>` : ''}
+
+          ${analysis.known_issue && analysis.knowledge_base_article ? `
+          <div class="kb-box">
+            <div class="box-title kb">Knowledge Base · ${analysis.knowledge_base_article}</div>
+            <div class="box-content">${analysis.known_fix || ''}</div>
+          </div>` : ''}
+
+          <div class="sections-grid">
+            <div class="section">
+              <div class="section-label">Likely Cause</div>
+              <div class="section-content">${analysis.likely_cause}</div>
+            </div>
+            <div class="section">
+              <div class="section-label">Suggested Next Step</div>
+              <div class="section-content">${analysis.suggested_next_step}</div>
+            </div>
+            <div class="section">
+              <div class="section-label">Immediate Workaround</div>
+              <div class="section-content">${analysis.workaround}</div>
+            </div>
+            <div class="section">
+              <div class="section-label">Reproduction Checklist</div>
+              <ul class="checklist">
+                ${(analysis.reproduction_checklist || []).map(s => `<li>${s}</li>`).join('')}
+              </ul>
+            </div>
+            <div class="section full-width">
+              <div class="section-label">Internal Note</div>
+              <div class="section-content mono">${analysis.internal_note}</div>
+            </div>
+            <div class="section full-width">
+              <div class="section-label">Customer Reply</div>
+              <div class="reply-box">${analysis.customer_reply}</div>
+            </div>
+          </div>
+
+          ${log.follow_up_reply ? `
+          <div class="section full-width" style="margin-bottom:1.25rem">
+            <div class="section-label">Follow-up Reply Sent</div>
+            <div class="reply-box">${log.follow_up_reply}</div>
+          </div>` : ''}
+
+          <!-- Follow up generator -->
+          ${log.status !== 'Resolved' ? `
+          <div class="followup-section">
+            <div class="followup-title">▸ Generate Follow-up Reply</div>
+            <textarea class="followup-input" id="followup-update" rows="3" 
+              placeholder="What update do you want to share with the partner? e.g. We identified the root cause as an expired API key and are working on a fix..."></textarea>
+            <button class="btn-primary" style="width:auto;padding:0.65rem 1.5rem" 
+              onclick="generateFollowUp(${logId})">
+              Generate Follow-up →
+            </button>
+          </div>` : ''}
+        </div>
+      `);
+
+      currentTicket = ticket;
+      currentAnalysis = analysis;
+
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
+  // ── Analyze sample ticket ──────────────────────────────────────────────────
+
+  async function analyzeSampleTicket(ticketId) {
+    if (activeTicketId) {
+      document.getElementById(`ticket-${activeTicketId}`)?.classList.remove('active');
+    }
+    activeTicketId = ticketId;
+    document.getElementById(`ticket-${ticketId}`)?.classList.add('active');
+    showLoading();
+
+    try {
+      const res = await fetch(`/analyze/${ticketId}`);
+      if (!res.ok) throw new Error('Analysis failed');
+      const data = await res.json();
+      currentLogId = data.log_id;
+      currentTicket = data.ticket;
+      currentAnalysis = data.analysis;
+      showResult(data.ticket, data.analysis, data.log_id);
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
+  // ── Analyze custom ticket ──────────────────────────────────────────────────
+
+  async function analyzeCustomTicket() {
+    const title = document.getElementById('custom-title').value.trim();
+    const store = document.getElementById('custom-store').value.trim();
+    const priority = document.getElementById('custom-priority').value;
+    const description = document.getElementById('custom-description').value.trim();
+
+    if (!title || !description) {
+      alert('Please provide at least a title and description.');
+      return;
+    }
+
+    if (activeTicketId) {
+      document.getElementById(`ticket-${activeTicketId}`)?.classList.remove('active');
+      activeTicketId = null;
+    }
+
+    const btn = document.querySelector('.btn-primary');
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+    showLoading();
+
+    try {
+      const res = await fetch('/analyze/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'TKT-CUSTOM', title, store: store || 'Unknown Store', priority, description })
+      });
+      if (!res.ok) throw new Error('Analysis failed');
+      const data = await res.json();
+      currentLogId = data.log_id;
+      currentTicket = data.ticket;
+      currentAnalysis = data.analysis;
+
+      // Clear the form after successful analysis
+      document.getElementById('custom-title').value = '';
+      document.getElementById('custom-store').value = '';
+      document.getElementById('custom-description').value = '';
+      document.getElementById('custom-priority').value = 'medium';
+
+      showResult(data.ticket, data.analysis, data.log_id);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Analyze Ticket →';
+    }
+  }
+  // ── Status update ──────────────────────────────────────────────────────────
+
+  async function updateStatus(logId, status) {
+    try {
+      const res = await fetch(`/logs/${logId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error('Status update failed');
+      viewLog(logId);
+    } catch (err) {
+      alert('Failed to update status: ' + err.message);
+    }
+  }
+
+  // ── Resolve modal ──────────────────────────────────────────────────────────
+
+  let resolveLogId = null;
+
+  function openResolveModal(logId) {
+    resolveLogId = logId;
+    document.getElementById('actual-fix-input').value = '';
+    document.getElementById('resolve-modal').classList.add('active');
+  }
+
+  function closeResolveModal() {
+    document.getElementById('resolve-modal').classList.remove('active');
+    resolveLogId = null;
+  }
+
+  async function confirmResolve() {
+    const actualFix = document.getElementById('actual-fix-input').value.trim();
+    if (!actualFix) {
+      alert('Please describe the actual fix before resolving.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`/logs/${resolveLogId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Resolved', actual_fix: actualFix })
+      });
+      const data = await res.json();
+      closeResolveModal();
+
+      if (data.fed_to_vector_store) {
+        alert('✓ Ticket resolved and fix stored in vector database. Future similar tickets will benefit from this resolution.');
+      }
+
+      viewLog(resolveLogId);
+      loadLogs();
+    } catch (err) {
+      alert('Failed to resolve: ' + err.message);
+    }
+  }
+
+  // ── Follow up ──────────────────────────────────────────────────────────────
+
+  async function generateFollowUp(logId) {
+    const update = document.getElementById('followup-update')?.value.trim();
+    if (!update) {
+      alert('Please describe the update to share.');
+      return;
+    }
+
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    try {
+      const res = await fetch(`/logs/${logId}/followup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ update })
+      });
+      if (!res.ok) throw new Error('Follow-up generation failed');
+      viewLog(logId);
+    } catch (err) {
+      alert('Failed: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Generate Follow-up →';
+    }
+  }
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+
+  async function loadStats() {
+    showContent('<div class="loading-state"><div class="loading-bar"><div class="loading-bar-inner"></div></div><div class="loading-text">Loading analytics...</div></div>');
+
+    try {
+      const res = await fetch('/stats');
+      const data = await res.json();
+      const db = data.database;
+      const vs = data.vector_store;
+
+      const byStatus = db.by_status || {};
+      const byType = db.by_issue_type || {};
+      const bySeverity = db.by_severity || {};
+
+      showContent(`
+        <div class="fade-in">
+          <div style="margin-bottom:2rem">
+            <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--muted);letter-spacing:0.15em;text-transform:uppercase;margin-bottom:0.5rem">Support Analytics</div>
+            <div style="font-size:1.75rem;font-weight:800">Ticket Intelligence Dashboard</div>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value">${db.total || 0}</div>
+              <div class="stat-label">Total Tickets Logged</div>
+              <div class="stat-sub">
+                ${Object.entries(byStatus).map(([k,v]) => `${k}: ${v}`).join(' · ') || 'No data yet'}
+              </div>
+            </div>
+
+            <div class="stat-card">
+              <div class="stat-value" style="color:var(--accent2)">${db.escalated || 0}</div>
+              <div class="stat-label">Escalated to 3rd Line</div>
+              <div class="stat-sub">
+                ${db.total ? Math.round((db.escalated/db.total)*100) : 0}% escalation rate
+              </div>
+            </div>
+
+            <div class="stat-card">
+              <div class="stat-value" style="color:var(--blue)">${db.known_issues || 0}</div>
+              <div class="stat-label">KB Matches Found</div>
+              <div class="stat-sub">
+                ${db.total ? Math.round((db.known_issues/db.total)*100) : 0}% matched existing KB
+              </div>
+            </div>
+
+            <div class="stat-card">
+              <div class="stat-value" style="color:var(--purple)">${vs.resolved_tickets || 0}</div>
+              <div class="stat-label">Resolutions in Vector DB</div>
+              <div class="stat-sub">
+                ${vs.kb_articles || 0} KB articles · ${vs.resolved_tickets || 0} learned fixes
+              </div>
+            </div>
+          </div>
+
+          <div class="sections-grid">
+            <div class="section">
+              <div class="section-label">Tickets by Issue Type</div>
+              <div class="section-content mono">
+                ${Object.entries(byType).length
+                  ? Object.entries(byType).map(([k,v]) => `
+                    <div style="display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid var(--border)">
+                      <span style="color:var(--text)">${k || 'Unclassified'}</span>
+                      <span style="color:var(--accent)">${v}</span>
+                    </div>`).join('')
+                  : '<div style="color:var(--muted)">No data yet</div>'
+                }
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-label">Tickets by Severity</div>
+              <div class="section-content mono">
+                ${Object.entries(bySeverity).length
+                  ? Object.entries(bySeverity).map(([k,v]) => {
+                    const colors = {Critical:'var(--critical)',High:'var(--high)',Medium:'var(--medium)',Low:'var(--low)'};
+                    return `
+                    <div style="display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid var(--border)">
+                      <span style="color:${colors[k]||'var(--text)'}">${k}</span>
+                      <span style="color:var(--accent)">${v}</span>
+                    </div>`}).join('')
+                  : '<div style="color:var(--muted)">No data yet</div>'
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+      `);
+    } catch (err) {
+      showError(err.message);
+    }
+  }
+
+  // ── Show result ────────────────────────────────────────────────────────────
+
+  function showResult(ticket, analysis, logId) {
+    const severityClass = `severity-${analysis.severity?.toLowerCase()}`;
+    const escalate = analysis.escalate_to_third_line;
+    const isLLM = analysis.analyzed_by === 'llm';
+    const kbMatches = analysis.kb_matches || [];
+    const pastResolutions = analysis.past_resolutions || [];
+
+    showContent(`
+      <div class="fade-in">
+        <div class="result-header">
+          <div class="result-ticket-id">${ticket.id} · ${ticket.store} · LOG-${logId}</div>
+          <div class="result-title">${ticket.title}</div>
+          <div class="result-meta">
+            <span class="meta-tag ${severityClass}">${analysis.severity} Severity</span>
+            <span class="meta-tag">${analysis.issue_type}</span>
+            ${escalate ? `<span class="meta-tag escalate">⚠ Escalate to 3rd Line</span>` : ''}
+            ${kbMatches.length > 0 ? `<span class="meta-tag kb-match">KB Match Found</span>` : ''}
+            ${pastResolutions.length > 0 ? `<span class="meta-tag past-match">◈ Past Resolution Found</span>` : ''}
+            <span class="meta-tag ${isLLM ? 'analyzed-llm' : 'analyzed-fallback'}">${isLLM ? '● LLM Analyzed' : '● Fallback'}</span>
+          </div>
+        </div>
+
+        <!-- Status controls -->
+        <div class="status-controls">
+          <span class="status-label">Status:</span>
+          ${['Open','In Progress','Escalated'].map(s => `
+            <button class="btn-status" onclick="updateStatus(${logId}, '${s}')">${s}</button>
+          `).join('')}
+          <button class="btn-resolve" onclick="openResolveModal(${logId})">
+            ✓ Mark Resolved + Store Fix →
+          </button>
+        </div>
+
+        ${escalate ? `
+        <div class="escalation-box">
+          <div class="escalation-title">Third Line Escalation Required</div>
+          <div class="box-content">${analysis.escalation_reason || ''}</div>
+        </div>` : ''}
+
+        ${kbMatches.length > 0 ? kbMatches.map(match => `
+        <div class="kb-box">
+          <div class="box-title kb">Knowledge Base · ${match.title} · Similarity: ${match.similarity_score}</div>
+          <div class="box-content">${match.known_fix}</div>
+        </div>`).join('') : ''}
+
+        ${pastResolutions.length > 0 ? pastResolutions.map(past => `
+        <div class="past-box">
+          <div class="box-title past">◈ Past Resolution · ${past.title} · Similarity: ${past.similarity_score}</div>
+          <div class="box-content"><strong>What fixed it:</strong> ${past.actual_fix}</div>
+        </div>`).join('') : ''}
+
+        <div class="sections-grid">
+          <div class="section">
+            <div class="section-label">Likely Cause</div>
+            <div class="section-content">${analysis.likely_cause}</div>
+          </div>
+          <div class="section">
+            <div class="section-label">Suggested Next Step</div>
+            <div class="section-content">${analysis.suggested_next_step}</div>
+          </div>
+          <div class="section">
+            <div class="section-label">Immediate Workaround</div>
+            <div class="section-content">${analysis.workaround}</div>
+          </div>
+          <div class="section">
+            <div class="section-label">Reproduction Checklist</div>
+            <ul class="checklist">
+              ${analysis.reproduction_checklist?.map(s => `<li>${s}</li>`).join('') || ''}
+            </ul>
+          </div>
+          <div class="section full-width">
+            <div class="section-label">Internal Note</div>
+            <div class="section-content mono">${analysis.internal_note}</div>
+          </div>
+          <div class="section full-width">
+            <div class="section-label">Customer Reply</div>
+            <div class="reply-box">${analysis.customer_reply}</div>
+          </div>
+        </div>
+
+        <!-- Follow up generator -->
+        <div class="followup-section">
+          <div class="followup-title">▸ Generate Follow-up Reply</div>
+          <textarea class="followup-input" id="followup-update" rows="3"
+            placeholder="What update do you want to share? e.g. We identified the root cause and are applying a fix now..."></textarea>
+          <button class="btn-primary" style="width:auto;padding:0.65rem 1.5rem"
+            onclick="generateFollowUp(${logId})">
+            Generate Follow-up →
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function showLoading() {
+    document.getElementById('content').innerHTML = `
+      <div class="loading-state">
+        <div class="loading-bar"><div class="loading-bar-inner"></div></div>
+        <div class="loading-text">Analyzing with EVA support engine...</div>
+      </div>
+    `;
+  }
+
+  function showEmpty() {
+    document.getElementById('content').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">◈</div>
+        <h2>Select a ticket to analyze</h2>
+        <p>Choose a sample ticket or submit a custom one to see the structured support analysis.</p>
+      </div>
+    `;
+  }
+
+  function showError(msg) {
+    document.getElementById('content').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">✕</div>
+        <h2>Something went wrong</h2>
+        <p>${msg}</p>
+      </div>
+    `;
+  }
+
+  function showContent(html) {
+    document.getElementById('content').innerHTML = html;
+  }
+
+  // Init
+  loadTickets();
+</script>
+</body>
+</html>
