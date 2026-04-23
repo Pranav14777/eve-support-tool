@@ -67,24 +67,24 @@ The New Black Support Engineer role description mentions *"bringing structure to
 ---
 
 ## Architecture
+
+```
 New ticket comes in
-↓
+        ↓
 ChromaDB semantic search
 (KB articles + past resolved tickets)
-↓
+        ↓
 Top relevant chunks sent to LLM as context
-↓
+        ↓
 LLM generates structured analysis (Groq / Llama 3.3-70b)
-↓
+        ↓
 Response validated + fallback if needed
-↓
+        ↓
 Everything logged to SQLite automatically
-↓
+        ↓
 On resolution — fix stored back into ChromaDB
 (feeds future ticket searches)
-
----
-
+```
 ## Tech Stack
 
 | Layer | Technology |
@@ -100,6 +100,7 @@ On resolution — fix stored back into ChromaDB
 
 ## Project Structure
 
+```
 eva-support-tool/
 ├── main.py           # FastAPI backend — all routes
 ├── prompts.py        # LLM integration — Groq + ChromaDB search
@@ -107,9 +108,8 @@ eva-support-tool/
 ├── database.py       # SQLite — ticket logging + status tracking
 ├── tickets.py        # 10 sample EVA-realistic support tickets
 └── static/
-└── index.html    # Frontend UI — Analyze, Logs, Analytics tabs
-
----
+    └── index.html    # Frontend UI — Analyze, Logs, Analytics tabs
+```
 
 ## API Endpoints
 
