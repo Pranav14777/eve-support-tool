@@ -202,6 +202,6 @@ This is a prototype built to demonstrate support workflow thinking. In productio
 
 ## Built By
 
-Pranav Gadamsetty — built as a portfolio project for the New Black Support Engineer role, demonstrating support workflow thinking, LLM integration, and RAG architecture.
+Pranav Gadamsetty — built as a portfolio project, demonstrating support workflow thinking, LLM integration, and RAG architecture.
 
 [LinkedIn](https://www.linkedin.com/in/pgdeveloper/) · [GitHub](https://github.com/Pranav14777)
