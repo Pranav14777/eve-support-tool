@@ -1,9 +1,12 @@
 import json
+import os
 from groq import Groq
 from vector_store import search_knowledge_base, search_resolved_tickets
+from dotenv import load_dotenv
 
-import os
-client = Groq(api_key=os.environ.get("GROQ_API_KEY", "your-groq-api-key-here"))
+load_dotenv()
+
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 def build_context_from_search(kb_matches: list, resolved_matches: list) -> str:
     """Build context string from ChromaDB search results to inform the LLM"""
