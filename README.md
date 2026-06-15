@@ -1,6 +1,10 @@
 # EVA Support Reproducer
 
+[![CI/CD Pipeline](https://github.com/Pranav14777/eve-support-tool/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pranav14777/eve-support-tool/actions/workflows/deploy.yml)
+
 > A second-line support workflow tool built for the New Black EVA platform — turning unstructured support tickets into structured, actionable intelligence.
+
+**Live Demo:** [eve-support-tool-production.up.railway.app](https://eve-support-tool-production.up.railway.app/)
 
 ---
 
@@ -85,6 +89,7 @@ Everything logged to SQLite automatically
 On resolution — fix stored back into ChromaDB
 (feeds future ticket searches)
 ```
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -94,6 +99,9 @@ On resolution — fix stored back into ChromaDB
 | Vector Database | ChromaDB |
 | Relational Database | SQLite |
 | Frontend | Vanilla HTML/CSS/JS |
+| Containerization | Docker |
+| CI/CD | GitHub Actions |
+| Hosting | Railway |
 | Language | Python 3.10+ |
 
 ---
@@ -101,14 +109,20 @@ On resolution — fix stored back into ChromaDB
 ## Project Structure
 
 ```
-eva-support-tool/
-├── main.py           # FastAPI backend — all routes
-├── prompts.py        # LLM integration — Groq + ChromaDB search
-├── vector_store.py   # ChromaDB — KB articles + resolved tickets
-├── database.py       # SQLite — ticket logging + status tracking
-├── tickets.py        # 10 sample EVA-realistic support tickets
+eve-support-tool/
+├── main.py            # FastAPI backend — all routes
+├── prompts.py         # LLM integration — Groq + ChromaDB search
+├── vector_store.py    # ChromaDB — KB articles + resolved tickets
+├── database.py        # SQLite — ticket logging + status tracking
+├── tickets.py         # 10 sample EVA-realistic support tickets
+├── test_main.py       # Pytest test suite
+├── Dockerfile         # Container build definition
+├── requirements.txt   # Python dependencies
+├── .github/
+│   └── workflows/
+│       └── deploy.yml # CI/CD pipeline — test, build, deploy
 └── static/
-    └── index.html    # Frontend UI — Analyze, Logs, Analytics tabs
+    └── index.html     # Frontend UI — Analyze, Logs, Analytics tabs
 ```
 
 ## API Endpoints
@@ -148,15 +162,15 @@ venv\Scripts\activate  # Windows
 source venv/bin/activate  # Mac/Linux
 
 # Install dependencies
-pip install fastapi uvicorn groq chromadb python-dotenv
+pip install -r requirements.txt
 ```
 
 ### Configuration
 
-Open `prompts.py` and set your Groq API key:
+Create a `.env` file in the project root with your Groq API key:
 
-```python
-client = Groq(api_key="your-groq-api-key-here")
+```
+GROQ_API_KEY=your-groq-api-key-here
 ```
 
 ### Run
@@ -166,6 +180,36 @@ uvicorn main:app --reload
 ```
 
 Open `http://localhost:8000`
+
+### Run with Docker
+
+```bash
+docker build -t eva-support-tool .
+docker run -p 8000:8000 --env-file .env eva-support-tool
+```
+
+---
+
+## Testing
+
+26 tests covering API endpoints, sample tickets, analysis, logging, and analytics.
+
+```bash
+pip install pytest httpx pytest-asyncio
+pytest test_main.py -v
+```
+
+---
+
+## CI/CD & Deployment
+
+Every push to `main` runs an automated pipeline via GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)):
+
+1. **Test** — runs the full pytest suite
+2. **Build** — builds the Docker image
+3. **Deploy** — deploys to [Railway](https://railway.app) (main branch only)
+
+Documentation-only changes (e.g. README updates) are skipped by the pipeline.
 
 ---
 
