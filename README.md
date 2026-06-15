@@ -2,7 +2,7 @@
 
 [![CI/CD Pipeline](https://github.com/Pranav14777/eve-support-tool/actions/workflows/deploy.yml/badge.svg)](https://github.com/Pranav14777/eve-support-tool/actions/workflows/deploy.yml)
 
-> A second-line support workflow tool built for the New Black EVA platform — turning unstructured support tickets into structured, actionable intelligence.
+> A second-line support workflow tool for the EVA unified commerce platform — turning unstructured support tickets into structured, actionable intelligence.
 
 **Live Demo:** [eve-support-tool-production.up.railway.app](https://eve-support-tool-production.up.railway.app/)
 
@@ -10,7 +10,7 @@
 
 ## What This Is
 
-EVA Support Reproducer is an AI-powered internal support tool that simulates the second-line support workflow for the New Black EVA unified commerce platform.
+EVA Support Reproducer is an AI-powered internal support tool that simulates the second-line support workflow for a unified commerce platform.
 
 When a support ticket comes in from a retail partner like Hunkemöller, Rituals, or Dyson, the tool:
 
@@ -24,7 +24,7 @@ When a support ticket comes in from a retail partner like Hunkemöller, Rituals,
 
 ## Why I Built This
 
-The New Black Support Engineer role description mentions *"bringing structure to complexity"*. I built this prototype to think concretely about what that means in practice — taking a messy, incomplete ticket and turning it into a clear, structured next step for the engineer and the partner.
+I was curious what it would take to turn a messy, incomplete support ticket into a clear, structured next step automatically — combining semantic search, an LLM, and a feedback loop into one workflow. This is a portfolio project built to explore that idea end to end, from ticket intake to resolution and learning.
 
 ---
 
