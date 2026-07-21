@@ -1,13 +1,30 @@
+import os
 import chromadb
-from chromadb.utils import embedding_functions
+from openai import OpenAI
 import json
 from datetime import datetime
 
 # Initialize ChromaDB client with persistent storage
 client = chromadb.PersistentClient(path="./chroma_db")
 
-# Use default sentence transformer for embeddings
-embedding_fn = embedding_functions.DefaultEmbeddingFunction()
+# NVIDIA NIM embedding model — nv-embedqa-e5-v5 is purpose-built for retrieval/RAG
+# Produces 1024-dim vectors vs 384-dim from the default MiniLM, giving richer semantic matching
+class NIMEmbeddingFunction:
+    def __init__(self):
+        self._client = OpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=os.environ.get("NVIDIA_API_KEY", ""),
+        )
+
+    def __call__(self, input):
+        response = self._client.embeddings.create(
+            input=input,
+            model="nvidia/nv-embedqa-e5-v5",
+            encoding_format="float",
+        )
+        return [item.embedding for item in response.data]
+
+embedding_fn = NIMEmbeddingFunction()
 
 # Two separate collections
 # 1. Knowledge base articles — curated known fixes
