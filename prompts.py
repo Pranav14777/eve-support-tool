@@ -1,12 +1,31 @@
 import json
 import os
-from groq import Groq
+from openai import OpenAI
+import anthropic
 from vector_store import search_knowledge_base, search_resolved_tickets
 from dotenv import load_dotenv
 
 load_dotenv()
 
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+KB_SIMILARITY_THRESHOLD = float(os.environ.get("KB_SIMILARITY_THRESHOLD", "0.65"))
+
+nim_client = OpenAI(
+    base_url="https://integrate.api.nvidia.com/v1",
+    api_key=os.environ.get("NVIDIA_API_KEY"),
+)
+
+anthropic_client = anthropic.Anthropic(
+    api_key=os.environ.get("ANTHROPIC_API_KEY")
+)
+
+MODEL_MAP = {
+    "low":    "meta/llama-3.1-8b-instruct",
+    "medium": "meta/llama-3.3-70b-instruct",
+    "high":   "nvidia/llama-3.1-nemotron-70b-instruct",
+}
+
+def get_model_for_priority(priority: str) -> str:
+    return MODEL_MAP.get(priority.lower(), MODEL_MAP["medium"])
 
 def build_context_from_search(kb_matches: list, resolved_matches: list) -> str:
     """Build context string from ChromaDB search results to inform the LLM"""
@@ -32,7 +51,6 @@ Issue Type: {match['issue_type']}
             context += f"""
 Past Ticket {i+1} (similarity: {match['similarity_score']}):
 Title: {match['title']}
-Store: {match['store']}
 Issue Type: {match['issue_type']}
 What Actually Fixed It: {match['actual_fix']}
 """
@@ -40,10 +58,15 @@ What Actually Fixed It: {match['actual_fix']}
 
     return context
 
-def fallback_response(ticket: dict, kb_matches: list, resolved_matches: list) -> dict:
-    """Fallback response when LLM fails"""
+def fallback_response(ticket: dict, kb_matches: list, resolved_matches: list, model: str = "") -> dict:
+    """Fallback response when LLM fails after all retry attempts"""
     kb_article = kb_matches[0] if kb_matches else None
     past_ticket = resolved_matches[0] if resolved_matches else None
+    best_score = max(
+        kb_article["similarity_score"] if kb_article else 0.0,
+        past_ticket["similarity_score"] if past_ticket else 0.0
+    )
+    best_match_title = (kb_article or past_ticket or {}).get("title", "")
 
     return {
         "issue_type": "Unclassified",
@@ -54,7 +77,7 @@ def fallback_response(ticket: dict, kb_matches: list, resolved_matches: list) ->
         "known_fix": kb_article["known_fix"] if kb_article else None,
         "reproduction_checklist": [
             "Read the full ticket description carefully",
-            "Check EVA system logs for the affected store",
+            "Check system logs for the affected store",
             "Verify if the issue is isolated or affecting multiple stores",
             "Check knowledge base for similar previously resolved issues",
             "Escalate to third line if cause remains unclear"
@@ -67,9 +90,16 @@ def fallback_response(ticket: dict, kb_matches: list, resolved_matches: list) ->
         "escalate_to_third_line": ticket.get("priority") == "high",
         "escalation_reason": "High priority ticket requires manual review." if ticket.get("priority") == "high" else None,
         "internal_note": f"Auto-analysis failed for ticket {ticket.get('id', 'unknown')}. KB match: {'Yes - ' + kb_article['title'] if kb_article else 'No'}. Past ticket match: {'Yes - ' + past_ticket['title'] if past_ticket else 'No'}. Please review manually.",
-        "customer_reply": f"Dear {ticket.get('store', 'Partner')} team,\n\nThank you for reaching out to New Black Support.\n\nWe have received your report regarding '{ticket.get('title', 'your issue')}' and our team is reviewing it as a priority.\n\nWe will follow up with a status update within 1 hour.\n\nBest regards,\nNew Black Support Team",
+        "customer_reply": f"Dear {ticket.get('store', 'Partner')} team,\n\nThank you for reaching out to Support.\n\nWe have received your report regarding '{ticket.get('title', 'your issue')}' and our team is reviewing it as a priority.\n\nWe will follow up with a status update within 1 hour.\n\nBest regards,\nSupport Team",
         "past_resolution": past_ticket,
-        "analyzed_by": "fallback"
+        "analyzed_by": "fallback",
+        "kb_similarity_score": best_score,
+        "kb_match_title": best_match_title,
+        "gate_passed": False,
+        "judge_verdict": "SKIPPED",
+        "judge_notes": "Fallback response — LLM did not respond after 2 attempts.",
+        "judge_concerns": [],
+        "model_used": model
     }
 
 def validate_response(result: dict) -> bool:
@@ -109,27 +139,188 @@ def validate_response(result: dict) -> bool:
 
     return True
 
-def analyze_ticket(ticket: dict) -> dict:
-    """Main function to analyze a support ticket using ChromaDB + Groq LLM"""
+def run_judge(ticket: dict, analysis: dict, context: str) -> dict:
+    """
+    Use Claude Haiku to independently evaluate the primary LLM's analysis.
+    Uses a different provider (Anthropic) to catch blind spots the primary model may miss.
+    Only called when the KB similarity gate passes.
+    Returns {"verdict": "PASS"|"FAIL"|"SKIPPED", "concerns": [...], "notes": "..."}
+    """
+    system_message = (
+        "You are a senior support quality reviewer for a unified commerce retail platform. "
+        "You evaluate AI-generated support ticket analyses for accuracy, appropriateness, and actionability. "
+        "You do not write new analyses — you only evaluate the one provided. "
+        "Respond only with valid JSON. Never include markdown or explanation outside the JSON."
+    )
 
-    # Step 1: Semantic search across KB articles
+    user_message = f"""Evaluate this AI-generated support ticket analysis.
+
+ORIGINAL TICKET:
+Title: {ticket.get('title')}
+Description: {ticket.get('description')}
+Priority: {ticket.get('priority')}
+
+AVAILABLE KNOWLEDGE BASE CONTEXT:
+{context}
+
+AI ANALYSIS TO EVALUATE:
+- Issue Type: {analysis.get('issue_type')}
+- Severity: {analysis.get('severity')}
+- Likely Cause: {analysis.get('likely_cause')}
+- Known Issue: {analysis.get('known_issue')}
+- Workaround: {analysis.get('workaround')}
+- Suggested Next Step: {analysis.get('suggested_next_step')}
+- Escalate to Third Line: {analysis.get('escalate_to_third_line')}
+- Escalation Reason: {analysis.get('escalation_reason', 'N/A')}
+- Reproduction Checklist: {json.dumps(analysis.get('reproduction_checklist', []))}
+
+Evaluate:
+1. Is issue_type correctly classified given the description and KB context?
+2. Is severity appropriate for the business impact described?
+3. Are the reproduction checklist steps concrete and executable?
+4. Does the workaround align with KB knowledge or described symptoms?
+5. Is the escalation decision proportionate to the severity and complexity?
+
+Return ONLY this exact JSON — no other text:
+{{
+  "verdict": "PASS or FAIL",
+  "concerns": ["specific concern if any"],
+  "notes": "one sentence overall assessment"
+}}
+
+PASS = analysis is accurate and actionable. FAIL = significant inaccuracies or likely to mislead the engineer."""
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            temperature=0.1,
+            system=system_message,
+            messages=[{"role": "user", "content": user_message}]
+        )
+
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        result = json.loads(raw)
+
+        if result.get("verdict") not in ("PASS", "FAIL"):
+            result["verdict"] = "FAIL"
+        if not isinstance(result.get("concerns"), list):
+            result["concerns"] = []
+        if not result.get("notes"):
+            result["notes"] = ""
+
+        return result
+
+    except json.JSONDecodeError as e:
+        print(f"Judge JSON parse error: {e}")
+        return {"verdict": "SKIPPED", "concerns": [], "notes": "Judge returned unparseable response."}
+    except Exception as e:
+        print(f"Judge LLM error: {e}")
+        return {"verdict": "SKIPPED", "concerns": [], "notes": "Judge evaluation failed — manual review recommended."}
+
+def summarize_fix_for_kb(ticket: dict, actual_fix: str) -> str:
+    """
+    Summarize a resolved fix into a concise, anonymized form safe for KB storage.
+    Strips all customer, store, and company names — keeps only the technical issue and resolution.
+    """
+    prompt = f"""A support engineer resolved a technical issue. Summarize the fix for a knowledge base.
+
+ISSUE TITLE: {ticket.get('title', '')}
+ISSUE DESCRIPTION: {ticket.get('description', '')}
+ACTUAL FIX APPLIED: {actual_fix}
+
+Write a 2-3 sentence technical summary that:
+1. Describes the technical problem without any customer names, store names, or company names
+2. Explains exactly what was done to fix it
+3. Uses generic terms like "the store", "the integration", "the configuration" — never specific names
+
+Return only the summary text, no JSON, no formatting."""
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        print(f"KB summarization failed: {e}")
+        return actual_fix[:500]
+
+def analyze_ticket(ticket: dict) -> dict:
+    """
+    Analyze a support ticket using:
+    1. KB similarity gate — blocks low-similarity tickets before LLM is called
+    2. NVIDIA NIM LLM — model chosen by ticket priority
+    3. Claude Haiku judge — independent validation of the analysis
+    """
+
+    # Step 1: Semantic search across KB articles and past resolved tickets
     print(f"Searching KB for ticket: {ticket.get('id')}")
     kb_matches = search_knowledge_base(ticket, n_results=2)
-
-    # Step 2: Semantic search across past resolved tickets
-    print(f"Searching resolved tickets for: {ticket.get('id')}")
     resolved_matches = search_resolved_tickets(ticket, n_results=2)
-
     print(f"KB matches: {len(kb_matches)}, Resolved matches: {len(resolved_matches)}")
 
-    # Step 3: Build context from search results
+    # Step 2: KB similarity confidence gate
+    best_kb_score = kb_matches[0]["similarity_score"] if kb_matches else 0.0
+    best_res_score = resolved_matches[0]["similarity_score"] if resolved_matches else 0.0
+    best_score = max(best_kb_score, best_res_score)
+
+    if best_kb_score >= best_res_score and kb_matches:
+        best_match_title = kb_matches[0]["title"]
+    elif resolved_matches:
+        best_match_title = resolved_matches[0]["title"]
+    else:
+        best_match_title = ""
+
+    print(f"Best KB similarity: {best_score:.3f} (threshold: {KB_SIMILARITY_THRESHOLD})")
+
+    if best_score < KB_SIMILARITY_THRESHOLD:
+        print(f"Gate FAILED for {ticket.get('id')}: {best_score:.3f} < {KB_SIMILARITY_THRESHOLD}")
+        return {
+            "gate_passed": False,
+            "kb_similarity_score": best_score,
+            "kb_match_title": best_match_title,
+            "judge_verdict": "SKIPPED",
+            "judge_notes": "Gate failed — no sufficiently similar KB article or past resolution found.",
+            "judge_concerns": [],
+            "model_used": None,
+            "analyzed_by": "gate_blocked",
+            "issue_type": "Unclassified",
+            "severity": ticket.get("priority", "medium").capitalize(),
+            "likely_cause": "",
+            "known_issue": False,
+            "knowledge_base_article": None,
+            "known_fix": None,
+            "reproduction_checklist": [],
+            "workaround": "",
+            "suggested_next_step": "Investigate manually and submit the actual fix to update the knowledge base.",
+            "escalate_to_third_line": ticket.get("priority") == "high",
+            "escalation_reason": None,
+            "internal_note": f"Gate blocked — KB similarity {best_score:.3f} below threshold {KB_SIMILARITY_THRESHOLD}.",
+            "customer_reply": "",
+            "kb_matches": kb_matches,
+            "past_resolutions": resolved_matches
+        }
+
+    # Step 3: Build context string for LLM
     context = build_context_from_search(kb_matches, resolved_matches)
 
-    # Step 4: Build prompt
-    prompt = f"""
-You are an expert second-line support engineer at New Black, a company that builds EVA — a unified omnichannel commerce platform used by large retail brands like Hunkemöller, Rituals, Dyson, and Kiko Milano.
+    # Step 4: Select model based on ticket priority
+    model = get_model_for_priority(ticket.get("priority", "medium"))
+    print(f"Gate PASSED — using model: {model}")
 
-EVA handles POS transactions, inventory management, order orchestration, click & collect flows, customer data, and third-party integrations like Adyen payments.
+    # Step 5: Build prompt
+    prompt = f"""
+You are an expert second-line support engineer for a unified commerce retail platform that handles POS transactions, inventory management, order orchestration, click & collect flows, customer data, and third-party integrations like payment gateways.
 
 Your job is to:
 1. Classify the issue type
@@ -174,13 +365,13 @@ Return ONLY this exact JSON structure with no extra text or markdown:
 }}
 """
 
-    # Step 5: Try LLM up to 2 times
+    # Step 6: Try LLM up to 2 times
     for attempt in range(2):
         try:
             print(f"LLM attempt {attempt + 1} for ticket {ticket.get('id')}")
 
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+            response = nim_client.chat.completions.create(
+                model=model,
                 messages=[
                     {
                         "role": "system",
@@ -197,7 +388,6 @@ Return ONLY this exact JSON structure with no extra text or markdown:
 
             raw = response.choices[0].message.content.strip()
 
-            # Clean markdown if model adds it
             if raw.startswith("```"):
                 parts = raw.split("```")
                 raw = parts[1]
@@ -209,9 +399,21 @@ Return ONLY this exact JSON structure with no extra text or markdown:
 
             if validate_response(result):
                 result["analyzed_by"] = "llm"
+                result["model_used"] = model
+                result["gate_passed"] = True
+                result["kb_similarity_score"] = best_score
+                result["kb_match_title"] = best_match_title
                 result["kb_matches"] = kb_matches
                 result["past_resolutions"] = resolved_matches
-                print(f"Ticket {ticket['id']} analyzed successfully")
+
+                # Step 7: Run judge (Claude Haiku — different provider to catch blind spots)
+                print(f"Running judge for ticket {ticket.get('id')}")
+                judge = run_judge(ticket, result, context)
+                result["judge_verdict"] = judge["verdict"]
+                result["judge_notes"] = judge["notes"]
+                result["judge_concerns"] = judge["concerns"]
+
+                print(f"Ticket {ticket['id']} analyzed successfully. Judge: {judge['verdict']}")
                 return result
             else:
                 print(f"Attempt {attempt + 1}: Validation failed, retrying...")
@@ -222,12 +424,12 @@ Return ONLY this exact JSON structure with no extra text or markdown:
             continue
 
         except Exception as e:
-            print(f"Attempt {attempt + 1}: Groq API error — {str(e)}")
+            print(f"Attempt {attempt + 1}: NIM API error — {str(e)}")
             continue
 
-    # Both attempts failed
-    print(f"Both attempts failed for {ticket.get('id')}. Using fallback.")
-    fallback = fallback_response(ticket, kb_matches, resolved_matches)
+    # Both attempts failed — return fallback
+    print(f"Both LLM attempts failed for {ticket.get('id')}. Using fallback.")
+    fallback = fallback_response(ticket, kb_matches, resolved_matches, model=model)
     fallback["kb_matches"] = kb_matches
     fallback["past_resolutions"] = resolved_matches
     return fallback
@@ -235,7 +437,7 @@ Return ONLY this exact JSON structure with no extra text or markdown:
 def generate_follow_up_reply(ticket: dict, analysis: dict, update: str) -> str:
     """Generate a follow up reply for an ongoing ticket"""
     prompt = f"""
-You are a support engineer at New Black writing a follow-up update to a retail partner.
+You are a support engineer writing a follow-up update to a retail partner.
 
 Original Issue: {ticket.get('title')}
 Store: {ticket.get('store')}
@@ -252,8 +454,8 @@ Return only the reply text, no JSON, no formatting.
 """
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        response = nim_client.chat.completions.create(
+            model=MODEL_MAP["medium"],
             messages=[
                 {
                     "role": "system",
@@ -271,4 +473,4 @@ Return only the reply text, no JSON, no formatting.
 
     except Exception as e:
         print(f"Follow up generation failed: {str(e)}")
-        return f"Dear {ticket.get('store', 'Partner')} team,\n\nThank you for your patience. We wanted to share a quick update regarding your reported issue: {update}\n\nWe will follow up shortly with further details.\n\nBest regards,\nNew Black Support Team"
+        return f"Dear {ticket.get('store', 'Partner')} team,\n\nThank you for your patience. We wanted to share a quick update regarding your reported issue: {update}\n\nWe will follow up shortly with further details.\n\nBest regards,\nSupport Team"

@@ -127,3 +127,15 @@ def test_valid_status_values(status):
     """All valid status values should be accepted by validation logic"""
     valid_statuses = ["Open", "In Progress", "Escalated", "Resolved"]
     assert status in valid_statuses
+
+# ── Engineer Feedback ──────────────────────────────────────────────────────────
+
+def test_feedback_invalid_value():
+    """Should reject feedback values other than helpful/not_helpful"""
+    response = client.patch("/logs/1/feedback", json={"feedback": "meh"})
+    assert response.status_code == 400
+
+def test_feedback_nonexistent_log():
+    """Should return 404 for unknown log ID"""
+    response = client.patch("/logs/99999/feedback", json={"feedback": "helpful"})
+    assert response.status_code == 404

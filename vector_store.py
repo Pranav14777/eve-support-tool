@@ -198,7 +198,6 @@ def search_resolved_tickets(ticket: dict, n_results: int = 2) -> list:
                 if distance < 1.2:
                     matches.append({
                         "title": metadata.get("title", ""),
-                        "store": metadata.get("store", ""),
                         "issue_type": metadata.get("issue_type", ""),
                         "actual_fix": metadata.get("actual_fix", ""),
                         "resolved_at": metadata.get("resolved_at", ""),
@@ -219,7 +218,7 @@ def add_resolved_ticket(log_id: int, ticket: dict, analysis: dict, actual_fix: s
     try:
         doc_id = f"resolved-{log_id}"
 
-        # Rich content combining ticket + resolution for semantic search
+        # Store only technical details — no customer/store identifiers
         document = f"""
         Issue: {ticket.get('title', '')}
         Description: {ticket.get('description', '')}
@@ -230,7 +229,6 @@ def add_resolved_ticket(log_id: int, ticket: dict, analysis: dict, actual_fix: s
 
         metadata = {
             "title": ticket.get("title", ""),
-            "store": ticket.get("store", ""),
             "issue_type": analysis.get("issue_type", ""),
             "likely_cause": analysis.get("likely_cause", ""),
             "actual_fix": actual_fix,
