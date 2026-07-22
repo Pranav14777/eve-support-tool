@@ -773,6 +773,38 @@
   </div>
 </div>
 
+<!-- Feedback Modal (served tickets only, shown once at resolution, fully optional) -->
+<div class="modal-overlay" id="feedback-modal" onclick="dismissFeedback(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">Quick feedback <span style="font-weight:400;color:var(--muted);font-size:0.8rem">· optional</span></div>
+    <div class="modal-sub">Two quick questions to help improve retrieval quality. Skip anytime — this won't be asked again.</div>
+
+    <div class="form-group" id="fb-q1">
+      <label>1. Was the KB article relevant?</label>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+        <button class="btn-status" onclick="answerRelevant(true)">Yes</button>
+        <button class="btn-status" onclick="answerRelevant(false)">No</button>
+      </div>
+    </div>
+
+    <div class="form-group" id="fb-q2" style="display:none">
+      <label>2. Did the fix help?</label>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+        <button class="btn-status" onclick="answerHelped(true)">Yes</button>
+        <button class="btn-status" onclick="answerHelped(false)">No</button>
+      </div>
+    </div>
+
+    <div id="fb-done" style="display:none;color:var(--accent);font-size:0.85rem;margin-top:0.5rem">
+      ✓ Thanks — recorded.
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="dismissFeedback()">Skip</button>
+    </div>
+  </div>
+</div>
+
 <header>
   <div class="logo">
     <div class="logo-mark">NB</div>
@@ -1160,6 +1192,7 @@
       if (!res.ok) throw new Error('Analysis failed');
       const data = await res.json();
       currentLogId = data.log_id;
+      if (data.gate_passed === false) { showAbstained(data); return; }
       currentTicket = data.ticket;
       currentAnalysis = data.analysis;
       showResult(data.ticket, data.analysis, data.log_id);
@@ -1200,8 +1233,6 @@
       if (!res.ok) throw new Error('Analysis failed');
       const data = await res.json();
       currentLogId = data.log_id;
-      currentTicket = data.ticket;
-      currentAnalysis = data.analysis;
 
       // Clear the form after successful analysis
       document.getElementById('custom-title').value = '';
@@ -1209,6 +1240,9 @@
       document.getElementById('custom-description').value = '';
       document.getElementById('custom-priority').value = 'medium';
 
+      if (data.gate_passed === false) { showAbstained(data); return; }
+      currentTicket = data.ticket;
+      currentAnalysis = data.analysis;
       showResult(data.ticket, data.analysis, data.log_id);
     } catch (err) {
       showError(err.message);
@@ -1268,12 +1302,88 @@
         alert('✓ Ticket resolved and fix stored in vector database. Future similar tickets will benefit from this resolution.');
       }
 
-      viewLog(resolveLogId);
+      const resolvedId = resolveLogId;
+      viewLog(resolvedId);
       loadLogs();
+
+      // Ask for feedback only on SERVED tickets — an abstained ticket showed no article
+      // or analysis, so there's nothing to rate (it auto-routes as a KB candidate anyway).
+      maybeAskFeedback(resolvedId);
     } catch (err) {
       alert('Failed to resolve: ' + err.message);
     }
   }
+
+  // ── Two-stage feedback (optional, served tickets only, asked once) ──────────
+
+  let feedbackLogId = null;
+
+  async function maybeAskFeedback(logId) {
+    try {
+      const res = await fetch(`/logs/${logId}`);
+      const log = await res.json();
+      // Served only, and never re-ask a ticket we've already prompted.
+      if (log.gate_passed !== true) return;
+      if (log.feedback_prompted_at) return;
+      openFeedbackModal(logId);
+    } catch (err) {
+      /* feedback is optional — never block the agent on it */
+    }
+  }
+
+  function openFeedbackModal(logId) {
+    feedbackLogId = logId;
+    document.getElementById('fb-q1').style.display = '';
+    document.getElementById('fb-q2').style.display = 'none';
+    document.getElementById('fb-done').style.display = 'none';
+    document.getElementById('feedback-modal').classList.add('active');
+  }
+
+  function closeFeedbackModal() {
+    document.getElementById('feedback-modal').classList.remove('active');
+    feedbackLogId = null;
+  }
+
+  async function sendFeedback(payload) {
+    if (!feedbackLogId) return;
+    try {
+      await fetch(`/logs/${feedbackLogId}/feedback`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (err) {
+      /* non-blocking */
+    }
+  }
+
+  async function answerRelevant(value) {
+    await sendFeedback({ kb_relevant: value });
+    // Progressive disclosure: only reveal the second question once the first is answered.
+    document.getElementById('fb-q1').style.display = 'none';
+    document.getElementById('fb-q2').style.display = '';
+  }
+
+  async function answerHelped(value) {
+    await sendFeedback({ fix_helped: value });
+    document.getElementById('fb-q2').style.display = 'none';
+    document.getElementById('fb-done').style.display = '';
+    setTimeout(closeFeedbackModal, 900);
+  }
+
+  // Skip / Esc / click-away: record that we asked (so it's never re-asked) WITHOUT
+  // recording a negative — an empty body leaves both flags NULL.
+  async function dismissFeedback(event) {
+    if (event && event.target !== event.currentTarget) return;  // ignore inner clicks
+    await sendFeedback({});
+    closeFeedbackModal();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('feedback-modal').classList.contains('active')) {
+      dismissFeedback();
+    }
+  });
 
   // ── Follow up ──────────────────────────────────────────────────────────────
 
@@ -1419,8 +1529,23 @@
             ${kbMatches.length > 0 ? `<span class="meta-tag kb-match">KB Match Found</span>` : ''}
             ${pastResolutions.length > 0 ? `<span class="meta-tag past-match">◈ Past Resolution Found</span>` : ''}
             <span class="meta-tag ${isLLM ? 'analyzed-llm' : 'analyzed-fallback'}">${isLLM ? '● LLM Analyzed' : '● Fallback'}</span>
+            ${typeof analysis.kb_margin === 'number'
+              ? `<span class="meta-tag">Gate: Served · margin ${analysis.kb_margin.toFixed(3)}</span>` : ''}
+            ${analysis.judge_verdict === 'PASS'
+              ? `<span class="meta-tag" style="border-color:#2e7d5b;color:#48c78e">✓ Judge: PASS</span>` : ''}
+            ${analysis.judge_verdict === 'FAIL'
+              ? `<span class="meta-tag" style="border-color:#b3261e;color:#ff6b5e">⚠ Judge: FAIL</span>` : ''}
           </div>
         </div>
+
+        ${analysis.judge_verdict === 'FAIL' ? `
+        <div style="border:1px solid #b3261e;background:rgba(179,38,30,0.08);border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem">
+          <div style="font-weight:700;color:#ff6b5e;margin-bottom:0.4rem">⚠ Independent judge (Gemini Flash) flagged this analysis</div>
+          <div class="box-content">${analysis.judge_notes || ''}</div>
+          ${(analysis.judge_concerns && analysis.judge_concerns.length)
+            ? `<ul class="checklist" style="margin-top:0.5rem">${analysis.judge_concerns.map(c => `<li>${c}</li>`).join('')}</ul>` : ''}
+          <div style="font-size:0.75rem;color:var(--muted);margin-top:0.6rem">Advisory second opinion from a different provider — the full analysis is shown below for you to judge.</div>
+        </div>` : ''}
 
         <!-- Status controls -->
         <div class="status-controls">
@@ -1489,6 +1614,49 @@
             onclick="generateFollowUp(${logId})">
             Generate Follow-up →
           </button>
+        </div>
+      </div>
+    `);
+  }
+
+  // ── Abstain (gate did not pass) ──────────────────────────────────────────────
+
+  function showAbstained(data) {
+    const reasonLabels = {
+      low_margin: 'Ambiguous match — no single article clearly best',
+      low_floor: 'Best match too weak',
+      insufficient_candidates: 'Not enough distinct KB coverage',
+      retrieval_unavailable: 'Retrieval service unavailable',
+      llm_unavailable: 'Analysis service unavailable'
+    };
+    const reason = reasonLabels[data.abstain_reason] || 'Insufficient confidence';
+    const fmt = (v) => (typeof v === 'number' ? v.toFixed(3) : '—');
+
+    showContent(`
+      <div class="fade-in">
+        <div style="border:1px solid var(--medium);background:rgba(230,170,60,0.07);border-radius:10px;padding:1.5rem 1.75rem">
+          <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--medium);letter-spacing:0.15em;text-transform:uppercase;margin-bottom:0.6rem">Confidence Gate · Abstained · LOG-${data.log_id}</div>
+          <div style="font-size:1.35rem;font-weight:800;margin-bottom:0.75rem">The assistant declined to answer</div>
+          <div class="box-content" style="margin-bottom:1rem">${data.message || reason}</div>
+
+          <div class="mono" style="display:grid;grid-template-columns:auto 1fr;gap:0.35rem 1.25rem;font-size:0.85rem;margin-bottom:1rem">
+            <span style="color:var(--muted)">Reason</span><span>${reason}</span>
+            <span style="color:var(--muted)">Top match</span><span>${data.kb_match_title || '—'} · ${fmt(data.kb_similarity_score)}</span>
+            <span style="color:var(--muted)">2nd match</span><span>${fmt(data.kb_second_score)}</span>
+            <span style="color:var(--muted)">Margin</span><span>${fmt(data.kb_margin)} (needs ≥ ${fmt(data.margin_threshold)})</span>
+            <span style="color:var(--muted)">Floor</span><span>top match needs ≥ ${fmt(data.abs_floor)}</span>
+          </div>
+
+          <div style="font-size:0.85rem;color:var(--muted)">
+            Investigate manually, then mark this ticket resolved with the actual fix — it will be
+            summarized, anonymized, and added to the knowledge base so future similar tickets pass the gate.
+          </div>
+
+          <div class="status-controls" style="margin-top:1.25rem">
+            <button class="btn-resolve" onclick="openResolveModal(${data.log_id})">
+              ✓ Submit Fix + Store in KB →
+            </button>
+          </div>
         </div>
       </div>
     `);

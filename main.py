@@ -1,20 +1,26 @@
-import os
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 from tickets import SAMPLE_TICKETS
-from prompts import analyze_ticket, generate_follow_up_reply, summarize_fix_for_kb
+from prompts import (
+    analyze_ticket,
+    generate_follow_up_reply,
+    summarize_fix_for_kb,
+    KB_MARGIN_THRESHOLD,
+    KB_ABS_FLOOR,
+)
 from database import (
     log_ticket,
     get_all_logs,
     get_log_by_id,
     update_ticket_status,
     save_follow_up_reply,
-    save_engineer_feedback,
+    save_feedback,
     get_stats
 )
+from feedback_routing import classify_feedback
 from vector_store import add_resolved_ticket, get_vector_store_stats
 
 app = FastAPI(
@@ -42,7 +48,14 @@ class FollowUpInput(BaseModel):
     update: str
 
 class FeedbackInput(BaseModel):
-    feedback: str  # "helpful" | "not_helpful"
+    """Two-stage feedback, asked at resolution on served tickets only.
+
+    Both flags are independently optional: progressive disclosure means a partial
+    response (relevance answered, helpfulness not) is the expected case, not an error.
+    An empty body is a dismissal — it records that we asked, without recording a negative.
+    """
+    kb_relevant: Optional[bool] = None   # "Was the KB article relevant?"
+    fix_helped: Optional[bool] = None    # "Did the fix help?"
 
 # ── Frontend ───────────────────────────────────────────────────────────────────
 
@@ -77,19 +90,25 @@ def get_ticket(ticket_id: str):
 # ── Analysis ───────────────────────────────────────────────────────────────────
 
 def _gate_fail_response(log_id: int, analysis: dict) -> dict:
-    """Format the hard-block response when KB similarity gate fails"""
-    threshold = float(os.environ.get("KB_SIMILARITY_THRESHOLD", "0.65"))
+    """Format the abstain response when the margin/floor gate does not pass.
+
+    Surfaces the gate decision (served/abstained), the reason, and the margin so the
+    UI and the logs can both see exactly why the assistant declined to answer.
+    """
     return {
         "log_id": log_id,
         "gate_passed": False,
+        "gate_decision": "abstained",
+        "abstain_reason": analysis.get("abstain_reason"),
         "kb_similarity_score": analysis.get("kb_similarity_score"),
-        "threshold": threshold,
-        "message": (
-            f"No sufficiently similar KB article or past resolution found "
-            f"(similarity {analysis.get('kb_similarity_score', 0):.3f} < threshold {threshold}). "
-            "Please investigate manually and submit the actual fix — "
-            "it will be added to the knowledge base to help with future tickets."
-        ),
+        "kb_second_score": analysis.get("kb_second_score"),
+        "kb_margin": analysis.get("kb_margin"),
+        "kb_match_title": analysis.get("kb_match_title"),
+        "margin_threshold": KB_MARGIN_THRESHOLD,
+        "abs_floor": KB_ABS_FLOOR,
+        "message": analysis.get("internal_note")
+        or "Not enough knowledge-base coverage to answer confidently. Please investigate manually "
+           "and submit the actual fix — it will be added to the knowledge base for future tickets.",
         "analysis": None
     }
 
@@ -263,14 +282,12 @@ def generate_follow_up(log_id: int, body: FollowUpInput):
 
 @app.patch("/logs/{log_id}/feedback")
 def submit_feedback(log_id: int, body: FeedbackInput):
-    """Record whether the engineer found this analysis helpful or not"""
-    valid_feedback = ["helpful", "not_helpful"]
-    if body.feedback not in valid_feedback:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid feedback. Must be one of: {valid_feedback}"
-        )
+    """Record two-stage feedback for a served ticket.
 
+    Accepts either flag or neither. An empty body is a dismissal: it stamps
+    feedback_prompted_at (so the ticket is never asked again) without recording a
+    negative. Returns the derived route from the shared feedback_routing rule.
+    """
     log = get_log_by_id(log_id)
     if not log:
         raise HTTPException(
@@ -278,12 +295,20 @@ def submit_feedback(log_id: int, body: FeedbackInput):
             detail=f"Log {log_id} not found"
         )
 
-    save_engineer_feedback(log_id, body.feedback)
+    save_feedback(log_id, kb_relevant=body.kb_relevant, fix_helped=body.fix_helped)
+
+    updated = get_log_by_id(log_id)
+    route = classify_feedback(
+        updated.get("gate_passed"), updated.get("kb_relevant"), updated.get("fix_helped")
+    )
 
     return {
         "success": True,
         "log_id": log_id,
-        "feedback": body.feedback
+        "kb_relevant": updated.get("kb_relevant"),
+        "fix_helped": updated.get("fix_helped"),
+        "dismissed": body.kb_relevant is None and body.fix_helped is None,
+        "route": route
     }
 
 # ── Analytics ──────────────────────────────────────────────────────────────────

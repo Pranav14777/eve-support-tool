@@ -1,22 +1,40 @@
 import json
 import os
 from openai import OpenAI
-import anthropic
-from vector_store import search_knowledge_base, search_resolved_tickets
+from vector_store import search_knowledge_base, search_resolved_tickets, EmbeddingUnavailable
 from dotenv import load_dotenv
 
 load_dotenv()
 
-KB_SIMILARITY_THRESHOLD = float(os.environ.get("KB_SIMILARITY_THRESHOLD", "0.65"))
+# ── Confidence gate config ───────────────────────────────────────────────────────
+# The gate serves a ticket to the LLM only when the KB has a clearly-best match:
+#   serve iff  top1_score >= KB_ABS_FLOOR  AND  (top1_score - top2_score) >= KB_MARGIN_THRESHOLD
+# Margin (not absolute score) is the primary signal: an uncovered ticket matches
+# everything equally poorly (small margin); a covered one has one article standing out.
+# The floor is a safety net so a weak-but-gapped top hit can't pass.
+#
+# NOTE: 0.06 / 0.39 are calibrated against the CURRENT 10-article KB via eval_retrieval.py
+# (margin 0.06, floor 0.39 → 0/18 negatives served, 28/50 covered served). They MUST be
+# re-derived once the KB grows to ~60–80 articles — more distractors shift the score
+# distribution and the right operating point moves with it.
+KB_MARGIN_THRESHOLD = float(os.environ.get("KB_MARGIN_THRESHOLD", "0.06"))
+KB_ABS_FLOOR = float(os.environ.get("KB_ABS_FLOOR", "0.39"))
+# Two candidates count as duplicates (skip #2 for the margin) if their scores are within this.
+KB_DUP_DELTA = 0.02
 
 nim_client = OpenAI(
     base_url="https://integrate.api.nvidia.com/v1",
     api_key=os.environ.get("NVIDIA_API_KEY"),
 )
 
-anthropic_client = anthropic.Anthropic(
-    api_key=os.environ.get("ANTHROPIC_API_KEY")
+# Judge + KB summarizer use Google Gemini via its OpenAI-compatible endpoint —
+# a different provider and architecture from NVIDIA NIM, so it catches blind spots.
+gemini_client = OpenAI(
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=os.environ.get("GEMINI_API_KEY"),
 )
+
+JUDGE_MODEL = "gemini-2.0-flash"
 
 MODEL_MAP = {
     "low":    "meta/llama-3.1-8b-instruct",
@@ -94,8 +112,13 @@ def fallback_response(ticket: dict, kb_matches: list, resolved_matches: list, mo
         "past_resolution": past_ticket,
         "analyzed_by": "fallback",
         "kb_similarity_score": best_score,
+        "kb_second_score": 0.0,
+        "kb_margin": 0.0,
         "kb_match_title": best_match_title,
+        "retrieved_articles": [],
         "gate_passed": False,
+        "gate_decision": "abstained",
+        "abstain_reason": "llm_unavailable",
         "judge_verdict": "SKIPPED",
         "judge_notes": "Fallback response — LLM did not respond after 2 attempts.",
         "judge_concerns": [],
@@ -141,8 +164,8 @@ def validate_response(result: dict) -> bool:
 
 def run_judge(ticket: dict, analysis: dict, context: str) -> dict:
     """
-    Use Claude Haiku to independently evaluate the primary LLM's analysis.
-    Uses a different provider (Anthropic) to catch blind spots the primary model may miss.
+    Use Google Gemini Flash to independently evaluate the primary LLM's analysis.
+    Uses a different provider (Google) and architecture to catch blind spots the primary model may miss.
     Only called when the KB similarity gate passes.
     Returns {"verdict": "PASS"|"FAIL"|"SKIPPED", "concerns": [...], "notes": "..."}
     """
@@ -191,15 +214,17 @@ Return ONLY this exact JSON — no other text:
 PASS = analysis is accurate and actionable. FAIL = significant inaccuracies or likely to mislead the engineer."""
 
     try:
-        response = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = gemini_client.chat.completions.create(
+            model=JUDGE_MODEL,
             max_tokens=300,
             temperature=0.1,
-            system=system_message,
-            messages=[{"role": "user", "content": user_message}]
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
         )
 
-        raw = response.content[0].text.strip()
+        raw = response.choices[0].message.content.strip()
         if raw.startswith("```"):
             parts = raw.split("```")
             raw = parts[1]
@@ -244,72 +269,188 @@ Write a 2-3 sentence technical summary that:
 Return only the summary text, no JSON, no formatting."""
 
     try:
-        response = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = gemini_client.chat.completions.create(
+            model=JUDGE_MODEL,
             max_tokens=200,
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
-        return response.content[0].text.strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"KB summarization failed: {e}")
         return actual_fix[:500]
+
+def evaluate_gate(kb_matches: list, resolved_matches: list) -> dict:
+    """Margin + floor confidence gate over the merged KB + resolved candidate pool.
+
+    serve iff  top1 >= KB_ABS_FLOOR  AND  (top1 - top2_distinct) >= KB_MARGIN_THRESHOLD
+
+    The #2 used for the margin is the next DISTINCT candidate. Near-duplicate candidates
+    are skipped so the margin isn't crushed by (a) the same article surfacing twice or
+    (b) a resolved ticket mirroring the KB article it was derived from — otherwise the
+    Phase 3 KB-feedback loop would silently degrade the gate as resolved tickets accumulate.
+    (Cross-collection mirrors won't share a title, so we also treat a near-scored candidate
+    from the *other* collection as a duplicate. Phase 3 should tag resolved tickets with
+    their source KB id for an exact signal.)
+
+    Returns {passed, reason, top1, top2, margin, title}.
+    reason ∈ {None, "low_floor", "low_margin", "insufficient_candidates"}.
+    """
+    candidates = (
+        [{**m, "_source": "kb"} for m in kb_matches]
+        + [{**m, "_source": "resolved"} for m in resolved_matches]
+    )
+    candidates.sort(key=lambda m: m.get("similarity_score", 0.0), reverse=True)
+
+    if not candidates:
+        return {"passed": False, "reason": "insufficient_candidates",
+                "top1": 0.0, "top2": 0.0, "margin": 0.0, "title": ""}
+
+    top = candidates[0]
+    top1 = top.get("similarity_score", 0.0)
+    title = top.get("title", "")
+
+    def _is_duplicate(c: dict) -> bool:
+        if abs(c.get("similarity_score", 0.0) - top1) >= KB_DUP_DELTA:
+            return False
+        return c.get("title", "") == title or c.get("_source") != top.get("_source")
+
+    second = next((c for c in candidates[1:] if not _is_duplicate(c)), None)
+
+    if second is None:
+        # Only one distinct candidate — margin is undefined; abstain rather than pass
+        # on top1 alone (guards against a lone weak hit sailing through as top1 - 0.0).
+        return {"passed": False, "reason": "insufficient_candidates",
+                "top1": top1, "top2": 0.0, "margin": 0.0, "title": title}
+
+    top2 = second.get("similarity_score", 0.0)
+    margin = round(top1 - top2, 3)
+
+    if top1 < KB_ABS_FLOOR:
+        reason = "low_floor"
+    elif margin < KB_MARGIN_THRESHOLD:
+        reason = "low_margin"
+    else:
+        reason = None
+
+    return {"passed": reason is None, "reason": reason,
+            "top1": top1, "top2": top2, "margin": margin, "title": title}
+
+def build_retrieval_snapshot(kb_matches: list, resolved_matches: list) -> list:
+    """A durable record of what retrieval actually surfaced, in rank order.
+
+    Stores id + title + snippet + score rather than bare ChromaDB ids: the corpus will be
+    swapped (e.g. to TechQA), which would orphan raw ids and invalidate every feedback row
+    Phase 2 collects. Captured at ANALYSIS time because it must record what was shown to the
+    agent — re-reading at feedback time could return a different article after a swap.
+    """
+    merged = sorted(
+        kb_matches + resolved_matches,
+        key=lambda m: m.get("similarity_score", 0.0),
+        reverse=True,
+    )
+    return [
+        {
+            "id": m.get("id", ""),
+            "title": m.get("title", ""),
+            "snippet": m.get("snippet", ""),
+            "score": m.get("similarity_score", 0.0),
+        }
+        for m in merged
+    ]
+
+def _abstain_message(gate: dict) -> str:
+    """Human-readable reason the gate abstained, shown to the support engineer."""
+    r = gate["reason"]
+    if r == "insufficient_candidates":
+        return ("No distinct knowledge-base match to compare against — not enough coverage to "
+                "answer confidently. Please investigate manually and submit the fix so it enters the KB.")
+    if r == "low_floor":
+        return (f"Best KB match is too weak (score {gate['top1']:.3f} < floor {KB_ABS_FLOOR}). "
+                "No sufficiently relevant article — investigate manually and submit the fix.")
+    return (f"Top two KB matches are too close (margin {gate['margin']:.3f} < {KB_MARGIN_THRESHOLD}) — "
+            "the best article isn't clearly better than the next, so coverage is ambiguous. "
+            "Investigate manually and submit the fix.")
+
+def _abstain_response(ticket: dict, kb_matches: list, resolved_matches: list, *,
+                      reason: str, top1: float, top2: float, margin: float,
+                      title: str, analyzed_by: str, message: str) -> dict:
+    """Build the abstain analysis dict (used for both gate-fail and retrieval-unavailable)."""
+    return {
+        "gate_passed": False,
+        "gate_decision": "abstained",
+        "abstain_reason": reason,
+        "kb_similarity_score": top1,
+        "kb_second_score": top2,
+        "kb_margin": margin,
+        "kb_match_title": title,
+        # Abstains auto-route to the Phase 3 candidate queue, so their retrieval set matters.
+        "retrieved_articles": build_retrieval_snapshot(kb_matches, resolved_matches),
+        "judge_verdict": "SKIPPED",
+        "judge_notes": message,
+        "judge_concerns": [],
+        "model_used": None,
+        "analyzed_by": analyzed_by,
+        "issue_type": "Unclassified",
+        "severity": ticket.get("priority", "medium").capitalize(),
+        "likely_cause": "",
+        "known_issue": False,
+        "knowledge_base_article": None,
+        "known_fix": None,
+        "reproduction_checklist": [],
+        "workaround": "",
+        "suggested_next_step": "Investigate manually and submit the actual fix to update the knowledge base.",
+        "escalate_to_third_line": ticket.get("priority") == "high",
+        "escalation_reason": None,
+        "internal_note": message,
+        "customer_reply": "",
+        "kb_matches": kb_matches,
+        "past_resolutions": resolved_matches,
+    }
 
 def analyze_ticket(ticket: dict) -> dict:
     """
     Analyze a support ticket using:
     1. KB similarity gate — blocks low-similarity tickets before LLM is called
     2. NVIDIA NIM LLM — model chosen by ticket priority
-    3. Claude Haiku judge — independent validation of the analysis
+    3. Gemini Flash judge — independent validation of the analysis
     """
 
-    # Step 1: Semantic search across KB articles and past resolved tickets
+    # Step 1: Semantic search across KB articles and past resolved tickets.
+    # If the embedding service is down, ABSTAIN — never analyze with no context.
     print(f"Searching KB for ticket: {ticket.get('id')}")
-    kb_matches = search_knowledge_base(ticket, n_results=2)
-    resolved_matches = search_resolved_tickets(ticket, n_results=2)
+    try:
+        kb_matches = search_knowledge_base(ticket, n_results=3)
+        resolved_matches = search_resolved_tickets(ticket, n_results=3)
+    except EmbeddingUnavailable as e:
+        print(f"Retrieval unavailable for {ticket.get('id')}: {e}")
+        return _abstain_response(
+            ticket, [], [],
+            reason="retrieval_unavailable",
+            top1=0.0, top2=0.0, margin=0.0, title="",
+            analyzed_by="retrieval_unavailable",
+            message=("Retrieval service is temporarily unavailable, so analysis was not attempted "
+                     "(the assistant will not answer without knowledge-base context). "
+                     "Please retry shortly or investigate manually."),
+        )
     print(f"KB matches: {len(kb_matches)}, Resolved matches: {len(resolved_matches)}")
 
-    # Step 2: KB similarity confidence gate
-    best_kb_score = kb_matches[0]["similarity_score"] if kb_matches else 0.0
-    best_res_score = resolved_matches[0]["similarity_score"] if resolved_matches else 0.0
-    best_score = max(best_kb_score, best_res_score)
+    # Step 2: KB confidence gate — margin (primary) + absolute floor (safety net)
+    gate = evaluate_gate(kb_matches, resolved_matches)
+    print(f"Gate: top1={gate['top1']:.3f} top2={gate['top2']:.3f} margin={gate['margin']:.3f} "
+          f"(margin_thr={KB_MARGIN_THRESHOLD}, floor={KB_ABS_FLOOR}) -> "
+          f"{'SERVE' if gate['passed'] else 'ABSTAIN (' + str(gate['reason']) + ')'}")
 
-    if best_kb_score >= best_res_score and kb_matches:
-        best_match_title = kb_matches[0]["title"]
-    elif resolved_matches:
-        best_match_title = resolved_matches[0]["title"]
-    else:
-        best_match_title = ""
+    if not gate["passed"]:
+        return _abstain_response(
+            ticket, kb_matches, resolved_matches,
+            reason=gate["reason"], top1=gate["top1"], top2=gate["top2"],
+            margin=gate["margin"], title=gate["title"],
+            analyzed_by="gate_blocked", message=_abstain_message(gate),
+        )
 
-    print(f"Best KB similarity: {best_score:.3f} (threshold: {KB_SIMILARITY_THRESHOLD})")
-
-    if best_score < KB_SIMILARITY_THRESHOLD:
-        print(f"Gate FAILED for {ticket.get('id')}: {best_score:.3f} < {KB_SIMILARITY_THRESHOLD}")
-        return {
-            "gate_passed": False,
-            "kb_similarity_score": best_score,
-            "kb_match_title": best_match_title,
-            "judge_verdict": "SKIPPED",
-            "judge_notes": "Gate failed — no sufficiently similar KB article or past resolution found.",
-            "judge_concerns": [],
-            "model_used": None,
-            "analyzed_by": "gate_blocked",
-            "issue_type": "Unclassified",
-            "severity": ticket.get("priority", "medium").capitalize(),
-            "likely_cause": "",
-            "known_issue": False,
-            "knowledge_base_article": None,
-            "known_fix": None,
-            "reproduction_checklist": [],
-            "workaround": "",
-            "suggested_next_step": "Investigate manually and submit the actual fix to update the knowledge base.",
-            "escalate_to_third_line": ticket.get("priority") == "high",
-            "escalation_reason": None,
-            "internal_note": f"Gate blocked — KB similarity {best_score:.3f} below threshold {KB_SIMILARITY_THRESHOLD}.",
-            "customer_reply": "",
-            "kb_matches": kb_matches,
-            "past_resolutions": resolved_matches
-        }
+    best_score = gate["top1"]
+    best_match_title = gate["title"]
 
     # Step 3: Build context string for LLM
     context = build_context_from_search(kb_matches, resolved_matches)
@@ -401,12 +542,17 @@ Return ONLY this exact JSON structure with no extra text or markdown:
                 result["analyzed_by"] = "llm"
                 result["model_used"] = model
                 result["gate_passed"] = True
+                result["gate_decision"] = "served"
+                result["abstain_reason"] = None
                 result["kb_similarity_score"] = best_score
+                result["kb_second_score"] = gate["top2"]
+                result["kb_margin"] = gate["margin"]
                 result["kb_match_title"] = best_match_title
+                result["retrieved_articles"] = build_retrieval_snapshot(kb_matches, resolved_matches)
                 result["kb_matches"] = kb_matches
                 result["past_resolutions"] = resolved_matches
 
-                # Step 7: Run judge (Claude Haiku — different provider to catch blind spots)
+                # Step 7: Run judge (Gemini Flash — different provider to catch blind spots)
                 print(f"Running judge for ticket {ticket.get('id')}")
                 judge = run_judge(ticket, result, context)
                 result["judge_verdict"] = judge["verdict"]
@@ -427,11 +573,16 @@ Return ONLY this exact JSON structure with no extra text or markdown:
             print(f"Attempt {attempt + 1}: NIM API error — {str(e)}")
             continue
 
-    # Both attempts failed — return fallback
+    # Both attempts failed — return fallback (gate had passed, but the LLM never produced
+    # a valid response, so route it like an abstain rather than a confident answer).
     print(f"Both LLM attempts failed for {ticket.get('id')}. Using fallback.")
     fallback = fallback_response(ticket, kb_matches, resolved_matches, model=model)
     fallback["kb_matches"] = kb_matches
     fallback["past_resolutions"] = resolved_matches
+    fallback["kb_second_score"] = gate["top2"]
+    fallback["kb_margin"] = gate["margin"]
+    fallback["abstain_reason"] = "llm_unavailable"
+    fallback["retrieved_articles"] = build_retrieval_snapshot(kb_matches, resolved_matches)
     return fallback
 
 def generate_follow_up_reply(ticket: dict, analysis: dict, update: str) -> str:

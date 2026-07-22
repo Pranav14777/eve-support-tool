@@ -130,12 +130,208 @@ def test_valid_status_values(status):
 
 # ── Engineer Feedback ──────────────────────────────────────────────────────────
 
-def test_feedback_invalid_value():
-    """Should reject feedback values other than helpful/not_helpful"""
-    response = client.patch("/logs/1/feedback", json={"feedback": "meh"})
-    assert response.status_code == 400
+def test_feedback_rejects_non_boolean():
+    """Flags are booleans — a string must be rejected by validation"""
+    response = client.patch("/logs/1/feedback", json={"kb_relevant": "sort of"})
+    assert response.status_code == 422
 
 def test_feedback_nonexistent_log():
     """Should return 404 for unknown log ID"""
-    response = client.patch("/logs/99999/feedback", json={"feedback": "helpful"})
+    response = client.patch("/logs/99999/feedback", json={"kb_relevant": True})
     assert response.status_code == 404
+
+# ── Confidence Gate (margin + floor) ─────────────────────────────────────────────
+
+import prompts
+import main
+from vector_store import EmbeddingUnavailable
+
+
+def _match(title, score):
+    return {"title": title, "known_fix": "", "workaround": "",
+            "issue_type": "", "similarity_score": score}
+
+
+def test_gate_serves_clear_winner():
+    """One article clearly above the rest and above the floor -> serve."""
+    gate = prompts.evaluate_gate([_match("A", 0.70), _match("B", 0.50)], [])
+    assert gate["passed"] is True
+    assert gate["reason"] is None
+    assert gate["margin"] == 0.20
+
+
+def test_gate_low_margin_abstain():
+    """Top two too close (margin < KB_MARGIN_THRESHOLD) -> abstain, low_margin."""
+    gate = prompts.evaluate_gate([_match("A", 0.70), _match("B", 0.66)], [])
+    assert gate["passed"] is False
+    assert gate["reason"] == "low_margin"
+
+
+def test_gate_low_floor_abstain():
+    """Big margin but top1 below the floor -> abstain, low_floor (floor checked first)."""
+    gate = prompts.evaluate_gate([_match("A", 0.35), _match("B", 0.20)], [])
+    assert gate["passed"] is False
+    assert gate["reason"] == "low_floor"
+
+
+def test_gate_single_candidate_abstain():
+    """Only one distinct candidate -> abstain (guards the top1 - 0.0 bug), insufficient_candidates."""
+    gate = prompts.evaluate_gate([_match("A", 0.90)], [])
+    assert gate["passed"] is False
+    assert gate["reason"] == "insufficient_candidates"
+
+
+def test_gate_dedupes_mirrored_resolved_ticket():
+    """A resolved ticket mirroring the top KB article must not crush the margin."""
+    kb = [_match("Adyen Payment Gateway Timeout", 0.70), _match("Something Else", 0.45)]
+    resolved = [{"title": "resolved mirror", "issue_type": "", "actual_fix": "",
+                 "resolved_at": "", "similarity_score": 0.69}]  # near-identical to top, other collection
+    gate = prompts.evaluate_gate(kb, resolved)
+    # #2 should be the distinct article at 0.45, not the 0.69 mirror -> margin 0.25, serve
+    assert gate["top2"] == 0.45
+    assert gate["passed"] is True
+
+
+def test_embedding_unavailable_abstain(monkeypatch):
+    """If embeddings are down, analyze_ticket abstains and never calls the LLM."""
+    def _raise(*args, **kwargs):
+        raise EmbeddingUnavailable("NIM down")
+
+    monkeypatch.setattr(prompts, "search_knowledge_base", _raise)
+
+    def _fail_llm(*args, **kwargs):
+        raise AssertionError("LLM must not be called when retrieval is unavailable")
+
+    monkeypatch.setattr(prompts.nim_client.chat.completions, "create", _fail_llm)
+
+    result = prompts.analyze_ticket({"id": "TKT-X", "title": "t", "description": "d",
+                                     "store": "s", "priority": "medium"})
+    assert result["gate_passed"] is False
+    assert result["analyzed_by"] == "retrieval_unavailable"
+    assert result["judge_verdict"] == "SKIPPED"
+
+
+def test_abstain_response_payload():
+    """The gate-fail API payload exposes the margin fields the UI and logs need."""
+    analysis = {
+        "abstain_reason": "low_margin",
+        "kb_similarity_score": 0.42,
+        "kb_second_score": 0.40,
+        "kb_margin": 0.02,
+        "kb_match_title": "Some Article",
+        "internal_note": "ambiguous",
+    }
+    payload = main._gate_fail_response(7, analysis)
+    assert payload["gate_passed"] is False
+    assert payload["gate_decision"] == "abstained"
+    assert payload["abstain_reason"] == "low_margin"
+    assert payload["analysis"] is None
+    for key in ("kb_similarity_score", "kb_second_score", "kb_margin",
+                "margin_threshold", "abs_floor"):
+        assert key in payload
+
+# ── Phase 2: feedback routing ────────────────────────────────────────────────────
+
+import feedback_routing as fr
+from database import log_ticket, save_feedback, get_log_by_id
+
+
+@pytest.mark.parametrize("gate_passed,kb_relevant,fix_helped,expected", [
+    # Abstained: nothing was shown to rate, auto-routes as a KB candidate.
+    (False, None,  None,  fr.ROUTE_COVERAGE_GAP),
+    (False, None,  True,  fr.ROUTE_COVERAGE_GAP),
+    # relevant=no is COMPLETE on its own — must be a coverage gap even when
+    # "did the fix help?" was never answered (the common progressive-disclosure partial).
+    (True,  False, None,  fr.ROUTE_COVERAGE_GAP),
+    (True,  False, False, fr.ROUTE_COVERAGE_GAP),
+    (True,  False, True,  fr.ROUTE_COVERAGE_GAP),
+    # Retrieval was fine, generation wasn't.
+    (True,  True,  False, fr.ROUTE_PROMPT_PROBLEM),
+    (True,  True,  True,  fr.ROUTE_SUCCESS),
+    # relevant=yes but helped unanswered — the one genuinely unroutable partial.
+    (True,  True,  None,  fr.ROUTE_PARTIAL),
+    # Dismissed before answering anything.
+    (True,  None,  None,  fr.ROUTE_NO_RESPONSE),
+])
+def test_classify_feedback_truth_table(gate_passed, kb_relevant, fix_helped, expected):
+    assert fr.classify_feedback(gate_passed, kb_relevant, fix_helped) == expected
+
+
+def test_only_coverage_gap_is_a_candidate():
+    assert fr.is_kb_candidate(fr.ROUTE_COVERAGE_GAP) is True
+    for route in (fr.ROUTE_PROMPT_PROBLEM, fr.ROUTE_SUCCESS,
+                  fr.ROUTE_PARTIAL, fr.ROUTE_NO_RESPONSE):
+        assert fr.is_kb_candidate(route) is False
+
+
+def test_partial_counts_as_a_response_but_no_response_does_not():
+    """feedback_coverage must count partials — the agent did engage."""
+    assert fr.is_any_response(fr.ROUTE_PARTIAL) is True
+    assert fr.is_any_response(fr.ROUTE_COVERAGE_GAP) is True
+    assert fr.is_any_response(fr.ROUTE_NO_RESPONSE) is False
+
+
+def _make_log(gate_passed=True):
+    ticket = {"id": "TKT-FB", "title": "t", "description": "d", "store": "s", "priority": "medium"}
+    analysis = {"gate_passed": gate_passed, "issue_type": "API Issue", "severity": "Low",
+                "retrieved_articles": [{"id": "kb-001", "title": "A", "snippet": "s", "score": 0.7}]}
+    return log_ticket(ticket, analysis)
+
+
+def test_partial_feedback_leaves_other_flag_null():
+    """Answering only relevance must not clobber fix_helped with NULL/False."""
+    log_id = _make_log()
+    save_feedback(log_id, kb_relevant=True)
+    log = get_log_by_id(log_id)
+    assert log["kb_relevant"] is True
+    assert log["fix_helped"] is None
+    assert log["feedback_route"] == fr.ROUTE_PARTIAL
+
+
+def test_dismissal_records_prompt_without_a_negative():
+    """Empty body = dismissal: stamps prompted, leaves both flags NULL (not False)."""
+    log_id = _make_log()
+    response = client.patch(f"/logs/{log_id}/feedback", json={})
+    assert response.status_code == 200
+    assert response.json()["dismissed"] is True
+    assert response.json()["route"] == fr.ROUTE_NO_RESPONSE
+
+    log = get_log_by_id(log_id)
+    assert log["kb_relevant"] is None
+    assert log["fix_helped"] is None
+    assert log["feedback_prompted_at"] is not None
+
+
+def test_relevant_no_routes_to_coverage_gap_via_api():
+    """The common partial (relevant=no, helped unanswered) is actionable, not no_response."""
+    log_id = _make_log()
+    response = client.patch(f"/logs/{log_id}/feedback", json={"kb_relevant": False})
+    assert response.status_code == 200
+    assert response.json()["route"] == fr.ROUTE_COVERAGE_GAP
+
+
+def test_abstained_ticket_routes_to_coverage_gap_without_feedback():
+    """Abstained tickets are never asked, yet still become KB candidates."""
+    log_id = _make_log(gate_passed=False)
+    log = get_log_by_id(log_id)
+    assert log["feedback_prompted_at"] is None
+    assert log["feedback_route"] == fr.ROUTE_COVERAGE_GAP
+    assert fr.is_kb_candidate(log["feedback_route"]) is True
+
+
+def test_retrieval_snapshot_persisted_for_corpus_swap():
+    """id + title + snippet must survive on the row so a corpus swap can't orphan feedback."""
+    log_id = _make_log()
+    log = get_log_by_id(log_id)
+    assert log["retrieved_articles"][0]["id"] == "kb-001"
+    assert log["retrieved_articles"][0]["title"] == "A"
+    assert "snippet" in log["retrieved_articles"][0]
+
+
+def test_stats_exposes_feedback_coverage_and_routes():
+    response = client.get("/stats")
+    assert response.status_code == 200
+    db = response.json()["database"]
+    assert "feedback_coverage" in db
+    assert "route_breakdown" in db
+    assert "false_confidence_count" in db

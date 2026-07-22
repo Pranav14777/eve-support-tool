@@ -47,8 +47,9 @@ jobs:
       - name: Run tests
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          KB_SIMILARITY_THRESHOLD: "0.65"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          KB_MARGIN_THRESHOLD: "0.06"
+          KB_ABS_FLOOR: "0.39"
         run: pytest test_main.py -v --tb=short
 
       - name: Upload test results

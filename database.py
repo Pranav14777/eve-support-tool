@@ -2,7 +2,19 @@ import sqlite3
 import json
 from datetime import datetime
 
+from feedback_routing import (
+    classify_feedback,
+    is_any_response,
+    ROUTE_SUCCESS,
+)
+
 DB_PATH = "eva_support.db"
+
+# Columns removed from the schema. Dropped once, then never re-added — note these must ALSO
+# be absent from `new_columns` below, or migrate_db would silently recreate them each boot.
+DROPPED_COLUMNS = [
+    "engineer_feedback",  # Phase 2: replaced by the two-flag kb_relevant / fix_helped signal
+]
 
 def migrate_db():
     """Apply schema migrations for existing databases. Idempotent."""
@@ -17,7 +29,14 @@ def migrate_db():
         ("judge_notes",          "TEXT"),
         ("judge_concerns",       "TEXT"),
         ("model_used",           "TEXT"),
-        ("engineer_feedback",    "TEXT"),
+        ("kb_second_score",      "REAL"),
+        ("kb_margin",            "REAL"),
+        # ── Phase 2: two-stage feedback ──────────────────────────────────────────
+        ("kb_relevant",          "BOOLEAN"),  # nullable — partial responses are expected
+        ("fix_helped",           "BOOLEAN"),  # nullable — revealed only after kb_relevant
+        ("retrieved_articles",   "TEXT"),     # JSON [{id,title,snippet,score}] — survives corpus swap
+        ("abstain_reason",       "TEXT"),
+        ("feedback_prompted_at", "TEXT"),     # set when asked/dismissed -> never re-ask
     ]
 
     for col_name, col_type in new_columns:
@@ -27,6 +46,14 @@ def migrate_db():
             )
         except sqlite3.OperationalError:
             pass  # Column already exists
+
+    # DROP COLUMN needs SQLite 3.35+; older runtimes just keep the unused column.
+    for col_name in DROPPED_COLUMNS:
+        try:
+            cursor.execute(f"ALTER TABLE tickets DROP COLUMN {col_name}")
+            print(f"Dropped legacy column: {col_name}")
+        except sqlite3.OperationalError:
+            pass  # Already dropped, or SQLite too old to support DROP COLUMN
 
     conn.commit()
     conn.close()
@@ -70,7 +97,13 @@ def init_db():
             judge_notes TEXT,
             judge_concerns TEXT,
             model_used TEXT,
-            engineer_feedback TEXT
+            kb_second_score REAL,
+            kb_margin REAL,
+            kb_relevant BOOLEAN,
+            fix_helped BOOLEAN,
+            retrieved_articles TEXT,
+            abstain_reason TEXT,
+            feedback_prompted_at TEXT
         )
     """)
 
@@ -97,8 +130,9 @@ def log_ticket(ticket: dict, analysis: dict) -> int:
             knowledge_base_article, known_fix, analyzed_by,
             status, created_at, reproduction_checklist,
             kb_similarity_score, kb_match_title, gate_passed,
-            judge_verdict, judge_notes, judge_concerns, model_used
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            judge_verdict, judge_notes, judge_concerns, model_used,
+            kb_second_score, kb_margin, retrieved_articles, abstain_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         ticket.get("id", "TKT-CUSTOM"),
         ticket.get("title", ""),
@@ -127,7 +161,11 @@ def log_ticket(ticket: dict, analysis: dict) -> int:
         analysis.get("judge_verdict", "SKIPPED"),
         analysis.get("judge_notes", ""),
         json.dumps(analysis.get("judge_concerns", [])),
-        analysis.get("model_used", "")
+        analysis.get("model_used", ""),
+        analysis.get("kb_second_score"),
+        analysis.get("kb_margin"),
+        json.dumps(analysis.get("retrieved_articles", [])),
+        analysis.get("abstain_reason")
     ))
 
     row_id = cursor.lastrowid
@@ -147,7 +185,8 @@ def get_all_logs() -> list:
             issue_type, severity, status, analyzed_by,
             escalate_to_third_line, known_issue,
             created_at, resolved_at, actual_fix,
-            kb_similarity_score, gate_passed, judge_verdict, model_used
+            kb_similarity_score, gate_passed, judge_verdict, model_used,
+            kb_margin, kb_relevant, fix_helped, feedback_prompted_at
         FROM tickets
         ORDER BY created_at DESC
     """)
@@ -175,7 +214,11 @@ def get_all_logs() -> list:
             "kb_similarity_score": row[14],
             "gate_passed": bool(row[15]) if row[15] is not None else None,
             "judge_verdict": row[16],
-            "model_used": row[17]
+            "model_used": row[17],
+            "kb_margin": row[18],
+            "kb_relevant": None if row[19] is None else bool(row[19]),
+            "fix_helped": None if row[20] is None else bool(row[20]),
+            "feedback_prompted_at": row[21]
         })
 
     return logs
@@ -202,7 +245,10 @@ def get_log_by_id(log_id: int) -> dict | None:
         "resolved_at", "reproduction_checklist",
         "kb_similarity_score", "kb_match_title", "gate_passed",
         "judge_verdict", "judge_notes", "judge_concerns",
-        "model_used", "engineer_feedback"
+        "model_used",
+        "kb_second_score", "kb_margin",
+        "kb_relevant", "fix_helped", "retrieved_articles",
+        "abstain_reason", "feedback_prompted_at"
     ]
 
     result = dict(zip(columns, row))
@@ -223,6 +269,23 @@ def get_log_by_id(log_id: int) -> dict | None:
 
     if result.get("gate_passed") is not None:
         result["gate_passed"] = bool(result["gate_passed"])
+
+    if result.get("retrieved_articles"):
+        try:
+            result["retrieved_articles"] = json.loads(result["retrieved_articles"])
+        except Exception:
+            result["retrieved_articles"] = []
+    else:
+        result["retrieved_articles"] = []
+
+    # Feedback flags stay tri-state: True / False / None (unanswered) — never coerce None to False.
+    for flag in ("kb_relevant", "fix_helped"):
+        if result.get(flag) is not None:
+            result[flag] = bool(result[flag])
+
+    result["feedback_route"] = classify_feedback(
+        result.get("gate_passed"), result.get("kb_relevant"), result.get("fix_helped")
+    )
 
     return result
 
@@ -266,16 +329,30 @@ def save_follow_up_reply(log_id: int, follow_up: str) -> bool:
     conn.close()
     return True
 
-def save_engineer_feedback(log_id: int, feedback: str) -> bool:
-    """Save engineer feedback on whether the analysis was helpful"""
+def save_feedback(log_id: int, kb_relevant=None, fix_helped=None) -> bool:
+    """Save two-stage feedback. Both flags are independently optional.
+
+    Only the fields actually supplied are written, so a partial response (the expected
+    case under progressive disclosure) never clobbers the other flag with NULL.
+    Always stamps feedback_prompted_at so the ticket is never asked again — that stamp is
+    what distinguishes "dismissed without answering" from "never asked".
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE tickets
-        SET engineer_feedback = ?
-        WHERE id = ?
-    """, (feedback, log_id))
+    sets, params = [], []
+    if kb_relevant is not None:
+        sets.append("kb_relevant = ?")
+        params.append(bool(kb_relevant))
+    if fix_helped is not None:
+        sets.append("fix_helped = ?")
+        params.append(bool(fix_helped))
+
+    sets.append("feedback_prompted_at = COALESCE(feedback_prompted_at, ?)")
+    params.append(datetime.now().isoformat())
+
+    params.append(log_id)
+    cursor.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", params)
 
     conn.commit()
     conn.close()
@@ -317,18 +394,42 @@ def get_stats() -> dict:
     cursor.execute("SELECT COUNT(*) FROM tickets WHERE known_issue = 1")
     known_issues = cursor.fetchone()[0]
 
-    # New quality metrics
-    cursor.execute("SELECT COUNT(*) FROM tickets WHERE engineer_feedback = 'helpful'")
-    helpful_count = cursor.fetchone()[0]
+    # ── Feedback metrics ─────────────────────────────────────────────────────────
+    # Classified in Python via the shared feedback_routing rule rather than inline SQL,
+    # so the routing logic lives in exactly one place (also used by the API and the
+    # Phase 3 candidate queue). Fine at this scale; revisit if the table grows large.
+    cursor.execute("SELECT gate_passed, kb_relevant, fix_helped, status FROM tickets")
+    rows = cursor.fetchall()
 
-    cursor.execute("SELECT COUNT(*) FROM tickets WHERE engineer_feedback IS NOT NULL")
-    with_feedback = cursor.fetchone()[0]
+    route_breakdown = {}
+    served_resolved = 0
+    served_resolved_with_response = 0
+    success_count = 0
+    responded_count = 0
+    false_confidence_count = 0
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM tickets
-        WHERE gate_passed = 1 AND judge_verdict = 'PASS' AND engineer_feedback = 'not_helpful'
-    """)
-    false_confidence_count = cursor.fetchone()[0]
+    for gate_passed, kb_relevant, fix_helped, status in rows:
+        gp = bool(gate_passed) if gate_passed is not None else False
+        rel = None if kb_relevant is None else bool(kb_relevant)
+        helped = None if fix_helped is None else bool(fix_helped)
+
+        route = classify_feedback(gp, rel, helped)
+        route_breakdown[route] = route_breakdown.get(route, 0) + 1
+
+        # false confidence = we served an answer but the article was NOT relevant.
+        if gp and rel is False:
+            false_confidence_count += 1
+
+        if is_any_response(route):
+            responded_count += 1
+            if route == ROUTE_SUCCESS:
+                success_count += 1
+
+        # Coverage denominator: only served AND resolved tickets are ever asked.
+        if gp and status == "Resolved":
+            served_resolved += 1
+            if is_any_response(route):
+                served_resolved_with_response += 1
 
     cursor.execute("SELECT AVG(kb_similarity_score) FROM tickets WHERE kb_similarity_score IS NOT NULL")
     avg_kb_similarity = cursor.fetchone()[0]
@@ -351,8 +452,12 @@ def get_stats() -> dict:
         "by_severity": severities,
         "escalated": escalated,
         "known_issues": known_issues,
-        "suggestion_success_rate": round(helpful_count / with_feedback * 100, 1) if with_feedback > 0 else None,
+        "suggestion_success_rate": round(success_count / responded_count * 100, 1) if responded_count > 0 else None,
         "false_confidence_count": false_confidence_count,
+        # How thin is this signal? Fraction of served+resolved tickets that gave any answer.
+        "feedback_coverage": round(served_resolved_with_response / served_resolved * 100, 1) if served_resolved > 0 else None,
+        "feedback_responses": responded_count,
+        "route_breakdown": route_breakdown,
         "avg_kb_similarity": round(avg_kb_similarity, 3) if avg_kb_similarity is not None else None,
         "gate_pass_rate": round(gate_passed_count / total * 100, 1) if total > 0 else None,
         "judge_pass_rate": round(judge_passed / judged_total * 100, 1) if judged_total > 0 else None
