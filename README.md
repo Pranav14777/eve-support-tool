@@ -79,8 +79,8 @@ Different models are used based on the ticket's incoming priority, balancing cos
 | Role | Model | Provider |
 |---|---|---|
 | Analysis — `low` priority | `meta/llama-3.1-8b-instruct` | NVIDIA NIM |
-| Analysis — `medium` priority | `meta/llama-3.3-70b-instruct` | NVIDIA NIM |
-| Analysis — `high` priority | `nvidia/llama-3.1-nemotron-70b-instruct` | NVIDIA NIM |
+| Analysis — `medium` priority | `meta/llama-3.1-70b-instruct` | NVIDIA NIM |
+| Analysis — `high` priority | `meta/llama-3.3-70b-instruct` | NVIDIA NIM |
 | Judge + KB summarizer | `gemini-2.0-flash` | Google |
 | Embeddings | `nvidia/nv-embedqa-e5-v5` (1024-dim) | NVIDIA NIM |
 
@@ -200,7 +200,7 @@ eve-support-tool/
 ├── database.py          # SQLite — schema/migrations, logging, feedback, metrics
 ├── tickets.py           # 10 sample support tickets
 ├── eval_retrieval.py    # Labeled retrieval + gate eval harness (calibration instrument)
-├── test_main.py         # Pytest suite (52 tests)
+├── test_main.py         # Pytest suite (53 deterministic + 4 opt-in live model checks)
 ├── Dockerfile           # Container build definition
 ├── requirements.txt     # Python dependencies
 ├── .env.example         # Copy to .env and fill in your keys
@@ -307,14 +307,22 @@ docker run -p 8000:8000 --env-file .env eva-support-tool
 
 ## Testing
 
-52 tests covering API endpoints, sample tickets, logging, analytics, the confidence gate, and feedback routing.
+53 deterministic tests covering API endpoints, sample tickets, logging, analytics, the confidence gate, model routing, and feedback routing — plus 4 opt-in **live** checks that verify every routed NVIDIA NIM model (and the embedding model) still responds.
 
 ```bash
 pip install pytest httpx pytest-asyncio
 pytest test_main.py -v
 ```
 
-Gate and routing tests are fully deterministic — they exercise `evaluate_gate` and `classify_feedback` directly with crafted scores and monkeypatched retrieval, so the suite makes **no network calls** and can't flake on an API quota. Coverage includes low-margin / low-floor / single-candidate abstention, duplicate-candidate handling, embedding-outage abstention, the full 9-case feedback routing truth table, and partial vs dismissed feedback.
+Gate and routing tests are fully deterministic — they exercise `evaluate_gate` and `classify_feedback` directly with crafted scores and monkeypatched retrieval, so the default suite makes **no network calls** and can't flake on an API quota. Coverage includes low-margin / low-floor / single-candidate abstention, duplicate-candidate handling, embedding-outage abstention, the full 9-case feedback routing truth table, and partial vs dismissed feedback.
+
+The live model checks are opt-in (they hit NVIDIA NIM), so they're skipped unless enabled:
+
+```bash
+RUN_LIVE_TESTS=1 pytest test_main.py -k callable -v
+```
+
+They exist because NIM decommissions models without removing them from its catalog listing — a call 404s even though the model still appears in `models.list()`. This check is what catches a silently-dead priority tier before it ships, and the CI pipeline runs it as a deploy gate.
 
 ---
 
@@ -322,11 +330,11 @@ Gate and routing tests are fully deterministic — they exercise `evaluate_gate`
 
 Every push to `main` runs an automated pipeline via GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)):
 
-1. **Test** — runs the full pytest suite
-2. **Build** — builds the Docker image
-3. **Deploy** — triggers a Render deploy hook (main branch only)
+1. **Test** — runs the deterministic pytest suite **and** the live NIM model-availability check
+2. **Build** — builds the Docker image (only if tests pass)
+3. **Deploy** — triggers a Render deploy hook (main branch only, only if test + build pass)
 
-Documentation-only changes (e.g. README updates) are skipped by the pipeline.
+Deployment is **gated on green CI** — Render's own auto-deploy is turned off, so nothing reaches production unless the tests (including the live model check) pass first. Documentation-only changes (e.g. README updates) are skipped by the pipeline.
 
 ### Deploying to Render (free tier)
 

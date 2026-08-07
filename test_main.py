@@ -335,3 +335,50 @@ def test_stats_exposes_feedback_coverage_and_routes():
     assert "feedback_coverage" in db
     assert "route_breakdown" in db
     assert "false_confidence_count" in db
+
+# ── Model routing ────────────────────────────────────────────────────────────────
+
+import os
+from vector_store import _embed
+
+RUN_LIVE = os.environ.get("RUN_LIVE_TESTS") == "1"
+live = pytest.mark.skipif(
+    not RUN_LIVE,
+    reason="live NIM API check — set RUN_LIVE_TESTS=1 (and NVIDIA_API_KEY) to run",
+)
+
+
+def test_model_routing_is_wired():
+    """Deterministic, offline: every priority maps to a model and unknown -> medium."""
+    assert set(prompts.MODEL_MAP) == {"low", "medium", "high"}
+    for tier in ("low", "medium", "high"):
+        assert prompts.get_model_for_priority(tier) == prompts.MODEL_MAP[tier]
+    assert prompts.get_model_for_priority("bogus") == prompts.MODEL_MAP["medium"]
+    assert prompts.get_model_for_priority("HIGH") == prompts.MODEL_MAP["high"]
+
+
+@live
+@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+def test_analysis_model_is_callable(tier):
+    """Live: each routed NIM model must actually respond with non-empty content.
+
+    Catches the failure that hit production — NIM decommissions a model (404 on call
+    even though it's still in the catalog listing), or a reasoning model returns empty
+    `content`, silently degrading every ticket at that priority to the fallback path.
+    """
+    model = prompts.MODEL_MAP[tier]
+    resp = prompts.nim_client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with the single word OK."}],
+        max_tokens=10,
+        temperature=0,
+    )
+    content = resp.choices[0].message.content
+    assert content and content.strip(), f"{tier} model {model} returned empty content"
+
+
+@live
+def test_embedding_model_is_callable():
+    """Live: the retrieval embedding model must respond with a 1024-dim vector."""
+    vectors = _embed(["connectivity check"], "query")
+    assert vectors and len(vectors[0]) == 1024

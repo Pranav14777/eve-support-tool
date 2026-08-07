@@ -44,7 +44,7 @@ These must be in a `.env` file locally (gitignored) and set as environment varia
 | `vector_store.py` | ChromaDB — KB seeding, semantic search, resolved ticket storage |
 | `tickets.py` | 10 hardcoded sample support tickets |
 | `eval_retrieval.py` | Labeled retrieval + gate eval harness — the calibration instrument for `KB_MARGIN_THRESHOLD` / `KB_ABS_FLOOR` |
-| `test_main.py` | Pytest suite (52 tests) — gate + routing tests are deterministic, no network calls |
+| `test_main.py` | Pytest suite — 53 deterministic (gate/routing, no network) + 4 opt-in live NIM model checks (`RUN_LIVE_TESTS=1`) |
 | `Dockerfile` | Container build — Python 3.10-slim, port 8000 |
 | `.github/workflows/deploy.yml` | CI/CD: test → build → deploy to Render |
 
@@ -69,8 +69,13 @@ The full analysis flow is in `analyze_ticket()`:
 
 4. get_model_for_priority()      — picks NVIDIA NIM model based on ticket.priority
    low    → meta/llama-3.1-8b-instruct
-   medium → meta/llama-3.3-70b-instruct
-   high   → nvidia/llama-3.1-nemotron-70b-instruct
+   medium → meta/llama-3.1-70b-instruct
+   high   → meta/llama-3.3-70b-instruct
+   NOTE: NIM decommissions models WITHOUT delisting them from the catalog (a call 404s
+   even though models.list() still shows it), and its nemotron "reasoning" models return
+   empty `content`. Only route to models verified callable via the live test
+   (RUN_LIVE_TESTS=1 pytest -k callable). That test is the guard against silent
+   priority-tier breakage — a dead model degrades every ticket at that tier to fallback.
 
 5. nim_client.chat.completions.create()   — OpenAI-compatible API call to NVIDIA NIM
    Retries up to 2 times before fallback_response()

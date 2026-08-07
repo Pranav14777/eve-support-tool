@@ -36,10 +36,15 @@ gemini_client = OpenAI(
 
 JUDGE_MODEL = "gemini-2.0-flash"
 
+# Priority -> NVIDIA NIM model. All three are verified callable on the free tier and return
+# clean (non-reasoning) content. NIM decommissions models without removing them from the
+# catalog listing (nvidia/llama-3.1-nemotron-70b-instruct is still *listed* but 404s on call,
+# and the nemotron reasoning models return empty `content`), so only call models confirmed to
+# respond. Quality gradient: 8B -> Llama 3.1 70B -> Llama 3.3 70B (newest/best).
 MODEL_MAP = {
     "low":    "meta/llama-3.1-8b-instruct",
-    "medium": "meta/llama-3.3-70b-instruct",
-    "high":   "nvidia/llama-3.1-nemotron-70b-instruct",
+    "medium": "meta/llama-3.1-70b-instruct",
+    "high":   "meta/llama-3.3-70b-instruct",
 }
 
 def get_model_for_priority(priority: str) -> str:
