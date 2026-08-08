@@ -94,13 +94,7 @@ jobs:
       - name: Verify image was built
         run: docker images | grep ${{ env.APP_NAME }}
 
-  # ── Job 3: Deploy to Render ───────────────────────────────────────────────────
-  deploy:
-    name: Deploy to Render
-    runs-on: ubuntu-latest
-    needs: [test, build]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - name: Trigger Render deploy hook
-        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+  # Deployment is handled natively by Render's "After CI Checks Pass" setting — Render
+  # watches these GitHub checks and deploys only when test + build succeed. No deploy job
+  # or RENDER_DEPLOY_HOOK secret is needed here (a failing deploy step would itself become a
+  # red check and block Render from ever deploying).

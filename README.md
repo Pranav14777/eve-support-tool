@@ -4,7 +4,7 @@
 
 > A second-line support workflow tool for the EVA unified commerce platform — turning unstructured support tickets into structured, actionable intelligence, and **knowing when to stay quiet**.
 
-> **Live demo:** currently being redeployed to Render (the previous Railway free tier was discontinued). Run it locally in ~2 minutes with the [Getting Started](#getting-started) steps.
+> **Live demo:** **[eve-support-tool.onrender.com](https://eve-support-tool.onrender.com/)** — hosted free on Render, so the first request after a period of inactivity may take ~50s to wake the service.
 
 ---
 
